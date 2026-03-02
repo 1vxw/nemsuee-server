@@ -1,0 +1,7 @@
+{
+  "name": "nemsuee-api",
+  "platform": "docker",
+  "properties": {
+    "linuxFxVersion": "DOCKER|youracr.azurecr.io/nemsuee-api:latest"
+  }
+}

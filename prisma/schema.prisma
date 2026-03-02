@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  INSTRUCTOR
+}
+
+enum EnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id           Int        @id @default(autoincrement())
+  fullName     String
+  email        String     @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime   @default(now())
+  courses      Course[]   @relation("InstructorCourses")
+  attempts     Attempt[]
+  drive        GoogleDriveConnection?
+  enrollments  Enrollment[]
+}
+
+model Course {
+  id           Int      @id @default(autoincrement())
+  title        String
+  description  String
+  enrollmentKey String
+  instructorId Int
+  createdAt    DateTime @default(now())
+  instructor   User     @relation("InstructorCourses", fields: [instructorId], references: [id])
+  lessons      Lesson[]
+  enrollments  Enrollment[]
+  sections     Section[]
+}
+
+model Lesson {
+  id          Int      @id @default(autoincrement())
+  title       String
+  content     String
+  fileUrl     String?
+  courseId    Int
+  sectionId   Int
+  createdAt   DateTime @default(now())
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  section     Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  quiz        Quiz?
+}
+
+model Quiz {
+  id        Int        @id @default(autoincrement())
+  lessonId  Int        @unique
+  createdAt DateTime   @default(now())
+  lesson    Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  questions Question[]
+  attempts  Attempt[]
+}
+
+model Question {
+  id            Int      @id @default(autoincrement())
+  quizId        Int
+  prompt        String
+  optionA       String
+  optionB       String
+  optionC       String
+  optionD       String
+  correctOption String
+  quiz          Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+}
+
+model Attempt {
+  id        Int      @id @default(autoincrement())
+  quizId    Int
+  studentId Int
+  score     Int
+  total     Int
+  createdAt DateTime @default(now())
+  quiz      Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+model GoogleDriveConnection {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @unique
+  googleEmail  String?
+  accessToken  String
+  refreshToken String?
+  expiryDate   BigInt?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Enrollment {
+  id        Int              @id @default(autoincrement())
+  courseId  Int
+  studentId Int
+  sectionId Int?
+  status    EnrollmentStatus @default(PENDING)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  course    Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student   User             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  section   Section?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+
+  @@unique([courseId, studentId])
+}
+
+model Section {
+  id          Int          @id @default(autoincrement())
+  name        String
+  courseId    Int
+  createdAt   DateTime     @default(now())
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons     Lesson[]
+  enrollments Enrollment[]
+
+  @@unique([courseId, name])
+}
