@@ -50,7 +50,7 @@ router.get("/", async (req, res) => {
     orderBy: { updatedAt: "desc" }
   });
 
-  const mapped = approved.map((e) => ({
+  const mapped = approved.map((e: (typeof approved)[number]) => ({
     id: e.course.id,
     title: e.course.title,
     description: e.course.description,
@@ -83,7 +83,7 @@ router.get("/catalog", requireRole("STUDENT"), async (req, res) => {
   });
 
   res.json(
-    courses.map((c) => ({
+    courses.map((c: (typeof courses)[number]) => ({
       id: c.id,
       title: c.title,
       description: c.description,
