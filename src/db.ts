@@ -1,5 +1,3 @@
-import prismaPkg from "@prisma/client";
-
-const { PrismaClient } = prismaPkg;
+import { PrismaClient } from "@prisma/client";
 
 export const prisma = new PrismaClient();
