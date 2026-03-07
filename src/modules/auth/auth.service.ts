@@ -191,6 +191,7 @@ export async function getInstructorApplications() {
     `SELECT ia.id, ia.userId, ia.status, ia.note, ia.createdAt, u.fullName, u.email
      FROM InstructorApplication ia
      JOIN User u ON u.id = ia.userId
+     WHERE ia.status != 'APPROVED'
      ORDER BY
        CASE ia.status WHEN 'PENDING' THEN 0 WHEN 'REJECTED' THEN 1 ELSE 2 END,
        ia.createdAt ASC`,
@@ -211,7 +212,10 @@ export async function reviewInstructorApplication(
   reviewedBy: number,
   note?: string,
 ) {
-  const candidate = await prisma.user.findUnique({ where: { id: userId } });
+  const candidate = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, role: true },
+  });
   if (!candidate || candidate.role !== "INSTRUCTOR") {
     const err = new Error("Instructor not found");
     (err as any).status = 404;
