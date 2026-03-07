@@ -125,12 +125,10 @@ export async function getAuthorizedDriveClient(userId: number) {
   });
 
   const drive = google.drive({ version: "v3", auth: client });
-  const raw = await prisma.$queryRawUnsafe<
-    Array<{ personalFolderId: string | null }>
-  >(
+  const raw = (await prisma.$queryRawUnsafe(
     `SELECT personalFolderId FROM GoogleDriveConnection WHERE userId = ? LIMIT 1`,
     userId,
-  );
+  )) as Array<{ personalFolderId: string | null }>;
   const personalFolderId = raw[0]?.personalFolderId || null;
   return { drive, connection, mode: "oauth" as const, personalFolderId };
 }

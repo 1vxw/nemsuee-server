@@ -60,16 +60,7 @@ router.get("/archived", requireRole("INSTRUCTOR"), async (req, res) => {
 });
 
 router.get("/teaching-blocks", requireRole("INSTRUCTOR"), async (req, res) => {
-  const blocks = await prisma.$queryRawUnsafe<
-    Array<{
-      id: number;
-      name: string;
-      courseId: number;
-      createdAt: string;
-      courseTitle: string;
-      courseDescription: string;
-    }>
-  >(
+  const blocks = (await prisma.$queryRawUnsafe(
     `SELECT s.id, s.name, s.courseId, s.createdAt, c.title AS courseTitle, c.description AS courseDescription
      FROM Section s
      JOIN BlockInstructor bi ON bi.sectionId = s.id
@@ -77,7 +68,14 @@ router.get("/teaching-blocks", requireRole("INSTRUCTOR"), async (req, res) => {
      WHERE bi.instructorId = ?
      ORDER BY s.courseId ASC, s.id ASC`,
     req.auth!.userId,
-  );
+  )) as Array<{
+    id: number;
+    name: string;
+    courseId: number;
+    createdAt: string;
+    courseTitle: string;
+    courseDescription: string;
+  }>;
   res.json(blocks);
 });
 
@@ -90,13 +88,11 @@ router.get("/:id/students", async (req, res) => {
     if (!(await canAccessCourse(req.auth!.userId, id)))
       return res.status(403).json({ message: "Forbidden" });
 
-    const sectionRows = await prisma.$queryRawUnsafe<
-      Array<{ sectionId: number }>
-    >(
+    const sectionRows = (await prisma.$queryRawUnsafe(
       `SELECT sectionId FROM BlockInstructor WHERE instructorId = ?`,
       req.auth!.userId,
-    );
-    const sectionIds = sectionRows.map((r) => r.sectionId);
+    )) as Array<{ sectionId: number }>;
+    const sectionIds = sectionRows.map((r: { sectionId: number }) => r.sectionId);
 
     const rows = await prisma.enrollment.findMany({
       where: {
@@ -173,9 +169,7 @@ router.get("/:courseId/instructors", requireRole("ADMIN"), async (req, res) => {
   const course = await prisma.course.findUnique({ where: { id: courseId } });
   if (!course) return res.status(404).json({ message: "Course not found" });
 
-  const rows = await prisma.$queryRawUnsafe<
-    Array<{ id: number; fullName: string; email: string }>
-  >(
+  const rows = (await prisma.$queryRawUnsafe(
     `SELECT DISTINCT u.id, u.fullName, u.email
      FROM BlockInstructor bi
      JOIN Section s ON s.id = bi.sectionId
@@ -183,7 +177,7 @@ router.get("/:courseId/instructors", requireRole("ADMIN"), async (req, res) => {
      WHERE s.courseId = ?
      ORDER BY u.fullName ASC`,
     courseId,
-  );
+  )) as Array<{ id: number; fullName: string; email: string }>;
   res.json(rows);
 });
 
@@ -239,16 +233,16 @@ router.delete(
       return res.status(404).json({ message: "Course not found" });
 
     for (const s of sections) {
-      const countRows = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
+      const countRows = (await prisma.$queryRawUnsafe(
         `SELECT COUNT(*) as c FROM BlockInstructor WHERE sectionId = ?`,
         s.id,
-      );
+      )) as Array<{ c: number }>;
       const count = Number(countRows[0]?.c || 0);
-      const targetRows = await prisma.$queryRawUnsafe<Array<{ id: number }>>(
+      const targetRows = (await prisma.$queryRawUnsafe(
         `SELECT id FROM BlockInstructor WHERE sectionId = ? AND instructorId = ? LIMIT 1`,
         s.id,
         instructorId,
-      );
+      )) as Array<{ id: number }>;
       if (targetRows.length && count <= 1) {
         return res.status(400).json({
           message:
@@ -285,20 +279,18 @@ router.get(
     )
       return res.status(403).json({ message: "Forbidden" });
 
-    const rows = await prisma.$queryRawUnsafe<
-      Array<{
-        id: number;
-        role: string | null;
-        instructor: { id: number; fullName: string; email: string };
-      }>
-    >(
+    const rows = (await prisma.$queryRawUnsafe(
       `SELECT bi.id, bi.role, u.id AS instructorId, u.fullName, u.email
      FROM BlockInstructor bi
      JOIN User u ON u.id = bi.instructorId
      WHERE bi.sectionId = ?
      ORDER BY bi.id ASC`,
       sectionId,
-    );
+    )) as Array<{
+      id: number;
+      role: string | null;
+      instructor: { id: number; fullName: string; email: string };
+    }>;
     res.json(rows);
   },
 );
@@ -358,10 +350,10 @@ router.delete(
     if (!section || section.courseId !== courseId)
       return res.status(404).json({ message: "Section not found" });
 
-    const countRows = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
+    const countRows = (await prisma.$queryRawUnsafe(
       `SELECT COUNT(*) as c FROM BlockInstructor WHERE sectionId = ?`,
       sectionId,
-    );
+    )) as Array<{ c: number }>;
     const count = Number(countRows[0]?.c || 0);
     if (count <= 1)
       return res

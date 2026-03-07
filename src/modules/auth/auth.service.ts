@@ -26,10 +26,10 @@ async function ensureStudentIdentityTable() {
 
 async function getStudentIdByUserId(userId: number) {
   await ensureStudentIdentityTable();
-  const rows = await prisma.$queryRawUnsafe<Array<{ studentId: string }>>(
+  const rows = (await prisma.$queryRawUnsafe(
     `SELECT studentId FROM StudentIdentity WHERE userId = ? LIMIT 1`,
     userId,
-  );
+  )) as Array<{ studentId: string }>;
   return rows[0]?.studentId || null;
 }
 
@@ -55,10 +55,10 @@ export async function registerUser(input: RegisterInput) {
       throw err;
     }
     await ensureStudentIdentityTable();
-    const duplicateRows = await prisma.$queryRawUnsafe<Array<{ id: number }>>(
+    const duplicateRows = (await prisma.$queryRawUnsafe(
       `SELECT id FROM StudentIdentity WHERE studentId = ? LIMIT 1`,
       studentId,
-    );
+    )) as Array<{ id: number }>;
     const duplicateStudentId = duplicateRows.length > 0;
     if (duplicateStudentId) {
       const err = new Error("Student ID already exists");
@@ -126,10 +126,10 @@ export async function loginUser(input: LoginInput) {
   }
 
   if (user.role === "INSTRUCTOR") {
-    const rows = await prisma.$queryRawUnsafe<Array<{ status: string }>>(
+    const rows = (await prisma.$queryRawUnsafe(
       `SELECT status FROM InstructorApplication WHERE userId = ? LIMIT 1`,
       user.id,
-    );
+    )) as Array<{ status: string }>;
     const status = rows[0]?.status;
     if (status && status !== "APPROVED") {
       const err = new Error(
@@ -187,24 +187,22 @@ export async function promoteUserToAdmin(email: string, bootstrapKey: string) {
 }
 
 export async function getInstructorApplications() {
-  return prisma.$queryRawUnsafe<
-    Array<{
-      id: number;
-      userId: number;
-      status: string;
-      note: string | null;
-      createdAt: string;
-      fullName: string;
-      email: string;
-    }>
-  >(
+  return (await prisma.$queryRawUnsafe(
     `SELECT ia.id, ia.userId, ia.status, ia.note, ia.createdAt, u.fullName, u.email
      FROM InstructorApplication ia
      JOIN User u ON u.id = ia.userId
      ORDER BY
        CASE ia.status WHEN 'PENDING' THEN 0 WHEN 'REJECTED' THEN 1 ELSE 2 END,
        ia.createdAt ASC`,
-  );
+  )) as Array<{
+    id: number;
+    userId: number;
+    status: string;
+    note: string | null;
+    createdAt: string;
+    fullName: string;
+    email: string;
+  }>;
 }
 
 export async function reviewInstructorApplication(

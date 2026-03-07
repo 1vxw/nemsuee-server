@@ -28,14 +28,14 @@ const courseInclude = {
 type SectionAccessRow = { courseId: number; sectionId: number };
 
 export async function getInstructorSectionAccess(instructorId: number) {
-  return prisma.$queryRawUnsafe<Array<SectionAccessRow>>(
+  return (await prisma.$queryRawUnsafe(
     `SELECT DISTINCT s.courseId
           , s.id as sectionId
      FROM BlockInstructor bi
      JOIN Section s ON s.id = bi.sectionId
      WHERE bi.instructorId = ?`,
     instructorId,
-  );
+  )) as Array<SectionAccessRow>;
 }
 
 export async function listAdminCourses() {
@@ -48,8 +48,10 @@ export async function listAdminCourses() {
 
 export async function listInstructorCourses(instructorId: number) {
   const accessibleRows = await getInstructorSectionAccess(instructorId);
-  const courseIds = Array.from(new Set(accessibleRows.map((r) => r.courseId)));
-  const sectionIds = accessibleRows.map((r) => r.sectionId);
+  const courseIds = Array.from(
+    new Set(accessibleRows.map((r: SectionAccessRow) => r.courseId)),
+  );
+  const sectionIds = accessibleRows.map((r: SectionAccessRow) => r.sectionId);
   const courses = await prisma.course.findMany({
     where: courseIds.length ? { id: { in: courseIds } } : { id: -1 },
     take: 50,
@@ -141,8 +143,10 @@ export async function listCatalogCourses(studentId: number, query: string) {
 
 export async function listArchivedInstructorCourses(instructorId: number) {
   const accessibleRows = await getInstructorSectionAccess(instructorId);
-  const ids = Array.from(new Set(accessibleRows.map((r) => r.courseId)));
-  const sectionIds = accessibleRows.map((r) => r.sectionId);
+  const ids = Array.from(
+    new Set(accessibleRows.map((r: SectionAccessRow) => r.courseId)),
+  );
+  const sectionIds = accessibleRows.map((r: SectionAccessRow) => r.sectionId);
   const courses = await prisma.course.findMany({
     where: ids.length ? { id: { in: ids } } : { id: -1 },
     include: {
