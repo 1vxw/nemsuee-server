@@ -26,6 +26,35 @@ const courseInclude = {
 };
 
 type SectionAccessRow = { courseId: number; sectionId: number };
+type CourseLike = { id: number };
+
+async function attachInstructors<T extends CourseLike>(courses: T[]) {
+  if (!courses.length) return [];
+  const courseIds = Array.from(new Set(courses.map((c) => c.id)));
+  const placeholders = courseIds.map(() => "?").join(", ");
+  const rows = (await prisma.$queryRawUnsafe(
+    `SELECT s.courseId, u.id, u.fullName, u.email
+     FROM BlockInstructor bi
+     JOIN Section s ON s.id = bi.sectionId
+     JOIN User u ON u.id = bi.instructorId
+     WHERE s.courseId IN (${placeholders})
+     ORDER BY s.courseId ASC, u.fullName ASC`,
+    ...courseIds,
+  )) as Array<{ courseId: number; id: number; fullName: string; email: string }>;
+
+  const byCourseId = new Map<number, Array<{ id: number; fullName: string; email: string }>>();
+  for (const row of rows) {
+    const list = byCourseId.get(row.courseId) || [];
+    if (!list.some((i) => i.id === row.id)) {
+      list.push({ id: row.id, fullName: row.fullName, email: row.email });
+    }
+    byCourseId.set(row.courseId, list);
+  }
+  return courses.map((course) => ({
+    ...course,
+    instructors: byCourseId.get(course.id) || [],
+  }));
+}
 
 export async function getInstructorSectionAccess(instructorId: number) {
   return (await prisma.$queryRawUnsafe(
@@ -43,7 +72,7 @@ export async function listAdminCourses() {
     include: courseInclude,
     orderBy: { id: "desc" },
   });
-  return courses.filter((c: any) => !c.isArchived);
+  return attachInstructors(courses.filter((c: any) => !c.isArchived));
 }
 
 export async function listInstructorCourses(instructorId: number) {
@@ -64,7 +93,7 @@ export async function listInstructorCourses(instructorId: number) {
     },
     orderBy: { id: "desc" },
   });
-  return courses.filter((c: any) => !c.isArchived).slice(0, 5);
+  return attachInstructors(courses.filter((c: any) => !c.isArchived).slice(0, 5));
 }
 
 export async function listStudentCourses(studentId: number) {
@@ -84,7 +113,7 @@ export async function listStudentCourses(studentId: number) {
     orderBy: { updatedAt: "desc" },
   });
 
-  return approved
+  const mapped = approved
     .filter((e: any) => !e.course?.isArchived)
     .map((e: (typeof approved)[number]) => ({
       id: e.course.id,
@@ -102,17 +131,32 @@ export async function listStudentCourses(studentId: number) {
           ]
         : [],
     }));
+
+  return attachInstructors(mapped);
 }
 
 export async function listCatalogCourses(studentId: number, query: string) {
+  const normalizedQuery = query.trim();
+  const matchingCourseIds = normalizedQuery
+    ? ((await prisma.$queryRawUnsafe(
+        `SELECT DISTINCT s.courseId
+         FROM BlockInstructor bi
+         JOIN Section s ON s.id = bi.sectionId
+         JOIN User u ON u.id = bi.instructorId
+         WHERE u.fullName LIKE ? OR u.email LIKE ?`,
+        `%${normalizedQuery}%`,
+        `%${normalizedQuery}%`,
+      )) as Array<{ courseId: number }>).map((r) => r.courseId)
+    : [];
+
   const courses = await prisma.course.findMany({
     where: {
-      ...(query
+      ...(normalizedQuery
         ? {
             OR: [
-              { title: { contains: query } },
-              { description: { contains: query } },
-              { instructor: { fullName: { contains: query } } },
+              { title: { contains: normalizedQuery } },
+              { description: { contains: normalizedQuery } },
+              ...(matchingCourseIds.length ? [{ id: { in: matchingCourseIds } }] : []),
             ],
           }
         : {}),
@@ -126,10 +170,10 @@ export async function listCatalogCourses(studentId: number, query: string) {
       sections: { select: { id: true, name: true }, orderBy: { id: "asc" } },
     },
     orderBy: { createdAt: "desc" },
-    take: 30,
+    take: 100,
   });
 
-  return courses
+  const mapped = courses
     .filter((c: any) => !c.isArchived)
     .map((c: (typeof courses)[number]) => ({
       id: c.id,
@@ -139,6 +183,9 @@ export async function listCatalogCourses(studentId: number, query: string) {
       sections: c.sections,
       enrollmentStatus: c.enrollments[0]?.status || null,
     }));
+
+  const withInstructors = await attachInstructors(mapped);
+  return withInstructors.slice(0, 30);
 }
 
 export async function listArchivedInstructorCourses(instructorId: number) {
@@ -159,5 +206,5 @@ export async function listArchivedInstructorCourses(instructorId: number) {
     orderBy: { id: "desc" },
   });
 
-  return courses.filter((c: any) => Boolean(c.isArchived));
+  return attachInstructors(courses.filter((c: any) => Boolean(c.isArchived)));
 }

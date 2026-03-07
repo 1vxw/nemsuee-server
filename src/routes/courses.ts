@@ -30,6 +30,26 @@ import {
 const router = Router();
 router.use(requireAuth);
 
+async function syncCourseDisplayInstructor(courseId: number) {
+  const firstAssigned = (await prisma.$queryRawUnsafe(
+    `SELECT bi.instructorId
+     FROM BlockInstructor bi
+     JOIN Section s ON s.id = bi.sectionId
+     WHERE s.courseId = ?
+     ORDER BY bi.createdAt ASC, bi.id ASC
+     LIMIT 1`,
+    courseId,
+  )) as Array<{ instructorId: number }>;
+
+  const nextInstructorId = firstAssigned[0]?.instructorId;
+  if (!nextInstructorId) return;
+
+  await prisma.course.update({
+    where: { id: courseId },
+    data: { instructorId: nextInstructorId },
+  });
+}
+
 router.get("/", async (req, res) => {
   if (req.auth?.role === "ADMIN") {
     return res.json(await listAdminCourses());
@@ -193,6 +213,7 @@ router.post(
     if (!course) return res.status(404).json({ message: "Course not found" });
     const instructor = await prisma.user.findUnique({
       where: { id: parsed.data.instructorId },
+      select: { id: true, role: true },
     });
     if (!instructor || instructor.role !== "INSTRUCTOR")
       return res.status(400).json({ message: "Instructor not found" });
@@ -209,6 +230,10 @@ router.post(
         parsed.data.role || "ASSISTANT",
       );
     }
+    await prisma.course.update({
+      where: { id: courseId },
+      data: { instructorId: parsed.data.instructorId },
+    });
 
     res.status(201).json({
       courseId,
@@ -258,6 +283,7 @@ router.delete(
       instructorId,
       courseId,
     );
+    await syncCourseDisplayInstructor(courseId);
     res.status(204).send();
   },
 );
@@ -311,6 +337,7 @@ router.post(
       return res.status(404).json({ message: "Section not found" });
     const instructor = await prisma.user.findUnique({
       where: { id: parsed.data.instructorId },
+      select: { id: true, role: true },
     });
     if (!instructor || instructor.role !== "INSTRUCTOR")
       return res.status(400).json({ message: "Instructor not found" });
@@ -329,6 +356,10 @@ router.post(
       sectionId,
       parsed.data.instructorId,
     );
+    await prisma.course.update({
+      where: { id: courseId },
+      data: { instructorId: parsed.data.instructorId },
+    });
     res.status(201).json({
       sectionId,
       instructorId: parsed.data.instructorId,
@@ -365,6 +396,7 @@ router.delete(
       sectionId,
       instructorId,
     );
+    await syncCourseDisplayInstructor(courseId);
     res.status(204).send();
   },
 );
@@ -503,6 +535,7 @@ router.post(
 
     const student = await prisma.user.findUnique({
       where: { email: parsed.data.email },
+      select: { id: true, role: true },
     });
     if (!student || student.role !== "STUDENT")
       return res.status(404).json({ message: "Student not found" });
