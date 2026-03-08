@@ -14,7 +14,9 @@ import {
   listInstructorCourses,
   listStudentCourses,
 } from "../modules/courses/course.service.js";
+import { emitNotificationAction } from "../services/notifications.js";
 import {
+  announcementSchema,
   archiveSchema,
   assignInstructorSchema,
   courseSchema,
@@ -26,9 +28,34 @@ import {
   sectionSchema,
   sectionUpdateSchema,
 } from "../modules/courses/schemas.js";
+import { ensureAcademicTermsStorage, getActiveTerm } from "../modules/terms/term.store.js";
+import {
+  createCourseOfferingFromPayload,
+  ensureOfferingsStorage,
+} from "../modules/offerings/offering.store.js";
 
 const router = Router();
 router.use(requireAuth);
+
+async function ensureAnnouncementsTable() {
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS CourseAnnouncement (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      courseId INTEGER NOT NULL,
+      instructorId INTEGER NOT NULL,
+      message TEXT NOT NULL,
+      sectionId INTEGER,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+  );
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE CourseAnnouncement ADD COLUMN sectionId INTEGER`,
+    );
+  } catch {
+    // Column already exists.
+  }
+}
 
 async function syncCourseDisplayInstructor(courseId: number) {
   const firstAssigned = (await prisma.$queryRawUnsafe(
@@ -86,6 +113,7 @@ router.get("/teaching-blocks", requireRole("INSTRUCTOR"), async (req, res) => {
      JOIN BlockInstructor bi ON bi.sectionId = s.id
      JOIN Course c ON c.id = s.courseId
      WHERE bi.instructorId = ?
+       AND COALESCE(c.isArchived, 0) = 0
      ORDER BY s.courseId ASC, s.id ASC`,
     req.auth!.userId,
   )) as Array<{
@@ -152,9 +180,118 @@ router.get("/:id/students", async (req, res) => {
   return res.json(rows);
 });
 
+router.get("/:id/announcements", requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const course = await prisma.course.findUnique({ where: { id } });
+  if (!course)
+    return res.status(404).json({ message: "Course not found" });
+
+  const isInstructor = req.auth!.role === "INSTRUCTOR";
+  const isAdmin = req.auth!.role === "ADMIN";
+  let studentSectionId: number | null = null;
+  if (isInstructor) {
+    if (!(await canAccessCourse(req.auth!.userId, id)))
+      return res.status(403).json({ message: "Forbidden" });
+  } else if (!isAdmin) {
+    const myEnrollment = await prisma.enrollment.findUnique({
+      where: {
+        courseId_studentId: { courseId: id, studentId: req.auth!.userId },
+      },
+    });
+    if (!myEnrollment || myEnrollment.status !== "APPROVED")
+      return res.status(403).json({ message: "Not enrolled" });
+    studentSectionId = myEnrollment.sectionId || null;
+  }
+
+  await ensureAnnouncementsTable();
+  const rows = (await prisma.$queryRawUnsafe(
+    `SELECT ca.id, ca.message, ca.sectionId, ca.createdAt, s.name as sectionName
+     FROM CourseAnnouncement ca
+     LEFT JOIN Section s ON s.id = ca.sectionId
+     WHERE ca.courseId = ?
+       AND (? IS NULL OR ca.sectionId IS NULL OR ca.sectionId = ?)
+     ORDER BY datetime(ca.createdAt) DESC, ca.id DESC`,
+    id,
+    studentSectionId,
+    studentSectionId,
+  )) as Array<{
+    id: number;
+    message: string;
+    sectionId: number | null;
+    sectionName: string | null;
+    createdAt: string;
+  }>;
+  return res.json(rows);
+});
+
+router.post("/:id/announcements", requireRole("INSTRUCTOR"), async (req, res) => {
+  const id = Number(req.params.id);
+  const parsed = announcementSchema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const course = await prisma.course.findUnique({ where: { id } });
+  if (!course || !(await canAccessCourse(req.auth!.userId, id)))
+    return res.status(404).json({ message: "Course not found" });
+  if (parsed.data.sectionId) {
+    const section = await prisma.section.findUnique({
+      where: { id: parsed.data.sectionId },
+      select: { id: true, courseId: true },
+    });
+    if (!section || section.courseId !== id) {
+      return res.status(400).json({ message: "Invalid section for this course" });
+    }
+    if (!(await canAccessSection(req.auth!.userId, parsed.data.sectionId))) {
+      return res.status(403).json({ message: "Forbidden for this block" });
+    }
+  }
+
+  await ensureAnnouncementsTable();
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO CourseAnnouncement (courseId, instructorId, message, sectionId)
+     VALUES (?, ?, ?, ?)`,
+    id,
+    req.auth!.userId,
+    parsed.data.message,
+    parsed.data.sectionId || null,
+  );
+  const inserted = (await prisma.$queryRawUnsafe(
+    `SELECT ca.id, ca.message, ca.sectionId, ca.createdAt, s.name as sectionName
+     FROM CourseAnnouncement ca
+     LEFT JOIN Section s ON s.id = ca.sectionId
+     WHERE rowid = last_insert_rowid()`,
+  )) as Array<{
+    id: number;
+    message: string;
+    sectionId: number | null;
+    sectionName: string | null;
+    createdAt: string;
+  }>;
+  await emitNotificationAction({
+    actionType: "COURSE_ANNOUNCEMENT",
+    message: `New announcement in ${course.title}${inserted[0]?.sectionName ? ` / ${inserted[0].sectionName}` : ""}: ${parsed.data.message}`,
+    actorUserId: req.auth!.userId,
+    actorRole: req.auth!.role,
+    courseId: id,
+    sectionId: parsed.data.sectionId,
+    visibility: "GLOBAL_STUDENTS",
+  });
+  return res.status(201).json(inserted[0] || null);
+});
+
 router.post("/", requireRole("ADMIN"), async (req, res) => {
   const parsed = courseSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  await ensureAcademicTermsStorage();
+  await ensureOfferingsStorage();
+  const activeTerm = await getActiveTerm();
+  const activeTermId = Number(activeTerm?.id || 0);
+  const offering = activeTermId
+    ? await createCourseOfferingFromPayload({
+        title: parsed.data.title,
+        description: parsed.data.description || "",
+        termId: activeTermId,
+      })
+    : null;
 
   const course = await prisma.course.create({
     data: {
@@ -166,6 +303,15 @@ router.post("/", requireRole("ADMIN"), async (req, res) => {
     },
     include: { sections: true },
   });
+  if (activeTerm?.id) {
+    await prisma.$executeRawUnsafe(
+      `UPDATE Course SET termId = ?, courseTemplateId = ?, offeringId = ? WHERE id = ?`,
+      activeTerm.id,
+      offering?.templateId || null,
+      offering?.offeringId || null,
+      course.id,
+    );
+  }
 
   res.status(201).json(course);
 });
@@ -422,6 +568,15 @@ router.patch(
     const updated = await prisma.section.update({
       where: { id: sectionId },
       data: { name: parsed.data.name.trim() },
+    });
+    await emitNotificationAction({
+      actionType: "BLOCK_RENAMED",
+      message: `Renamed block in "${course.title}" to "${updated.name}".`,
+      actorUserId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      courseId,
+      sectionId,
+      visibility: "GLOBAL_STUDENTS",
     });
     res.json(updated);
   },
@@ -752,6 +907,15 @@ router.post(
         sectionId,
       },
     });
+    await emitNotificationAction({
+      actionType: "RESOURCE_ADDED",
+      message: `Added resource "${lesson.title}" in "${course.title} / ${section.name}".`,
+      actorUserId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      courseId,
+      sectionId,
+      visibility: "GLOBAL_STUDENTS",
+    });
 
     res.status(201).json(lesson);
   },
@@ -797,6 +961,15 @@ router.patch(
             : undefined,
       },
     });
+    await emitNotificationAction({
+      actionType: "RESOURCE_UPDATED",
+      message: `Updated resource "${updated.title}" in "${course.title} / ${section.name}".`,
+      actorUserId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      courseId,
+      sectionId,
+      visibility: "GLOBAL_STUDENTS",
+    });
 
     res.json(updated);
   },
@@ -822,8 +995,18 @@ router.delete(
     ) {
       return res.status(404).json({ message: "Lesson not found" });
     }
+    const section = await prisma.section.findUnique({ where: { id: sectionId } });
 
     await prisma.lesson.delete({ where: { id: lessonId } });
+    await emitNotificationAction({
+      actionType: "RESOURCE_DELETED",
+      message: `Deleted resource "${lesson.title}" from "${course.title} / ${section?.name || `Block ${sectionId}`}".`,
+      actorUserId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      courseId,
+      sectionId,
+      visibility: "GLOBAL_STUDENTS",
+    });
     res.status(204).send();
   },
 );
@@ -850,6 +1033,14 @@ router.put("/:id", async (req, res) => {
     where: { id },
     data: parsed.data,
   });
+  await emitNotificationAction({
+    actionType: "COURSE_UPDATED",
+    message: `Updated course details for "${updated.title}".`,
+    actorUserId: req.auth!.userId,
+    actorRole: req.auth!.role,
+    courseId: id,
+    visibility: "GLOBAL_STUDENTS",
+  });
   res.json(updated);
 });
 
@@ -868,6 +1059,14 @@ router.patch("/:id/archive", requireRole("INSTRUCTOR"), async (req, res) => {
       where: { id },
       data: { isArchived: archived },
     });
+    await emitNotificationAction({
+      actionType: archived ? "COURSE_ARCHIVED" : "COURSE_UNARCHIVED",
+      message: `${archived ? "Archived" : "Unarchived"} course "${found.title}".`,
+      actorUserId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      courseId: id,
+      visibility: "GLOBAL_STUDENTS",
+    });
     return res.json({
       id: updated.id,
       isArchived: Boolean(updated.isArchived),
@@ -878,6 +1077,14 @@ router.patch("/:id/archive", requireRole("INSTRUCTOR"), async (req, res) => {
       archived ? 1 : 0,
       id,
     );
+    await emitNotificationAction({
+      actionType: archived ? "COURSE_ARCHIVED" : "COURSE_UNARCHIVED",
+      message: `${archived ? "Archived" : "Unarchived"} course "${found.title}".`,
+      actorUserId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      courseId: id,
+      visibility: "GLOBAL_STUDENTS",
+    });
     return res.json({ id, isArchived: archived });
   }
 });

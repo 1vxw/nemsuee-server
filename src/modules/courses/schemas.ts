@@ -53,3 +53,7 @@ export const sectionUpdateSchema = z.object({
   name: z.string().trim().min(1).max(80),
 });
 
+export const announcementSchema = z.object({
+  message: z.string().trim().min(1).max(1000),
+  sectionId: z.number().int().positive().optional(),
+});

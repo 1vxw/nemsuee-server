@@ -1,4 +1,10 @@
 import { prisma } from "../../db.js";
+import {
+  ensureAcademicTermsStorage,
+  getActiveTermCourseIds,
+  getCourseTermMap,
+} from "../terms/term.store.js";
+import { ensureOfferingsStorage } from "../offerings/offering.store.js";
 
 const lessonInclude = {
   include: { quiz: { include: { questions: true } } },
@@ -68,18 +74,30 @@ export async function getInstructorSectionAccess(instructorId: number) {
 }
 
 export async function listAdminCourses() {
+  await ensureAcademicTermsStorage();
+  await ensureOfferingsStorage();
   const courses = await prisma.course.findMany({
     include: courseInclude,
     orderBy: { id: "desc" },
   });
-  return attachInstructors(courses.filter((c: any) => !c.isArchived));
+  const withInstructors = await attachInstructors(
+    courses.filter((c: any) => !c.isArchived),
+  );
+  const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
+  return withInstructors.map((course) => ({
+    ...course,
+    term: termMap.get(course.id) || null,
+  }));
 }
 
 export async function listInstructorCourses(instructorId: number) {
+  await ensureAcademicTermsStorage();
+  await ensureOfferingsStorage();
   const accessibleRows = await getInstructorSectionAccess(instructorId);
+  const activeTermCourseIds = new Set(await getActiveTermCourseIds());
   const courseIds = Array.from(
     new Set(accessibleRows.map((r: SectionAccessRow) => r.courseId)),
-  );
+  ).filter((id) => activeTermCourseIds.has(id));
   const sectionIds = accessibleRows.map((r: SectionAccessRow) => r.sectionId);
   const courses = await prisma.course.findMany({
     where: courseIds.length ? { id: { in: courseIds } } : { id: -1 },
@@ -93,10 +111,20 @@ export async function listInstructorCourses(instructorId: number) {
     },
     orderBy: { id: "desc" },
   });
-  return attachInstructors(courses.filter((c: any) => !c.isArchived).slice(0, 5));
+  const withInstructors = await attachInstructors(
+    courses.filter((c: any) => !c.isArchived).slice(0, 5),
+  );
+  const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
+  return withInstructors.map((course) => ({
+    ...course,
+    term: termMap.get(course.id) || null,
+  }));
 }
 
 export async function listStudentCourses(studentId: number) {
+  await ensureAcademicTermsStorage();
+  await ensureOfferingsStorage();
+  const activeTermCourseIds = new Set(await getActiveTermCourseIds());
   const approved = await prisma.enrollment.findMany({
     where: { studentId, status: "APPROVED" },
     take: 5,
@@ -114,7 +142,10 @@ export async function listStudentCourses(studentId: number) {
   });
 
   const mapped = approved
-    .filter((e: any) => !e.course?.isArchived)
+    .filter(
+      (e: any) =>
+        !e.course?.isArchived && activeTermCourseIds.has(Number(e.course?.id)),
+    )
     .map((e: (typeof approved)[number]) => ({
       id: e.course.id,
       title: e.course.title,
@@ -132,10 +163,18 @@ export async function listStudentCourses(studentId: number) {
         : [],
     }));
 
-  return attachInstructors(mapped);
+  const withInstructors = await attachInstructors(mapped);
+  const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
+  return withInstructors.map((course) => ({
+    ...course,
+    term: termMap.get(course.id) || null,
+  }));
 }
 
 export async function listCatalogCourses(studentId: number, query: string) {
+  await ensureAcademicTermsStorage();
+  await ensureOfferingsStorage();
+  const activeTermCourseIds = await getActiveTermCourseIds();
   const normalizedQuery = query.trim();
   const matchingCourseIds = normalizedQuery
     ? ((await prisma.$queryRawUnsafe(
@@ -160,6 +199,9 @@ export async function listCatalogCourses(studentId: number, query: string) {
             ],
           }
         : {}),
+      ...(activeTermCourseIds.length
+        ? { id: { in: activeTermCourseIds } }
+        : { id: -1 }),
     },
     include: {
       instructor: { select: { fullName: true } },
@@ -185,10 +227,17 @@ export async function listCatalogCourses(studentId: number, query: string) {
     }));
 
   const withInstructors = await attachInstructors(mapped);
-  return withInstructors.slice(0, 30);
+  const sliced = withInstructors.slice(0, 30);
+  const termMap = await getCourseTermMap(sliced.map((c) => c.id));
+  return sliced.map((course) => ({
+    ...course,
+    term: termMap.get(course.id) || null,
+  }));
 }
 
 export async function listArchivedInstructorCourses(instructorId: number) {
+  await ensureAcademicTermsStorage();
+  await ensureOfferingsStorage();
   const accessibleRows = await getInstructorSectionAccess(instructorId);
   const ids = Array.from(
     new Set(accessibleRows.map((r: SectionAccessRow) => r.courseId)),
@@ -206,5 +255,12 @@ export async function listArchivedInstructorCourses(instructorId: number) {
     orderBy: { id: "desc" },
   });
 
-  return attachInstructors(courses.filter((c: any) => Boolean(c.isArchived)));
+  const withInstructors = await attachInstructors(
+    courses.filter((c: any) => Boolean(c.isArchived)),
+  );
+  const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
+  return withInstructors.map((course) => ({
+    ...course,
+    term: termMap.get(course.id) || null,
+  }));
 }

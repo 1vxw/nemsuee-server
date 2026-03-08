@@ -44,9 +44,29 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 }
 
-export function requireRole(role: "STUDENT" | "INSTRUCTOR" | "ADMIN") {
+type AppRole = "STUDENT" | "INSTRUCTOR" | "ADMIN" | "REGISTRAR" | "DEAN";
+
+function roleMatches(requiredRole: AppRole, actualRole?: string) {
+  if (!actualRole) return false;
+  if (requiredRole === "ADMIN") {
+    return actualRole === "ADMIN" || actualRole === "REGISTRAR";
+  }
+  return actualRole === requiredRole;
+}
+
+export function requireRole(role: AppRole) {
   return (req: Request, res: Response, next: NextFunction) => {
-    if (req.auth?.role !== role) return res.status(403).json({ message: "Forbidden" });
+    if (!roleMatches(role, req.auth?.role)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+    next();
+  };
+}
+
+export function requireAnyRole(roles: AppRole[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const matched = roles.some((role) => roleMatches(role, req.auth?.role));
+    if (!matched) return res.status(403).json({ message: "Forbidden" });
     next();
   };
 }

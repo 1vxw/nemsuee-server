@@ -11,6 +11,8 @@ enum Role {
   STUDENT
   INSTRUCTOR
   ADMIN
+  REGISTRAR
+  DEAN
 }
 
 enum EnrollmentStatus {
