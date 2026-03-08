@@ -118,11 +118,11 @@ router.post("/actions", async (req, res) => {
   if (data.visibility === "GLOBAL_STUDENTS" || data.visibility === "GLOBAL_ALL") {
     // Broadcast to students only when action is related to a course.
     if (data.courseId) {
-      const rows = await prisma.enrollment.findMany({
+      const rows: Array<{ studentId: number }> = await prisma.enrollment.findMany({
         where: { courseId: data.courseId, status: "APPROVED" },
         select: { studentId: true },
       });
-      const studentIds = Array.from(new Set(rows.map((r) => r.studentId)));
+      const studentIds: number[] = Array.from(new Set(rows.map((r) => r.studentId)));
       for (const studentId of studentIds) {
         if (studentId === actorUserId) continue;
         await addNotification({

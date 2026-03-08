@@ -97,7 +97,7 @@ export async function emitNotificationAction(input: {
     (visibility === "GLOBAL_STUDENTS" || visibility === "GLOBAL_ALL") &&
     input.courseId
   ) {
-    const rows = await prisma.enrollment.findMany({
+    const rows: Array<{ studentId: number }> = await prisma.enrollment.findMany({
       where: {
         courseId: input.courseId,
         status: "APPROVED",
@@ -105,7 +105,7 @@ export async function emitNotificationAction(input: {
       },
       select: { studentId: true },
     });
-    const studentIds = Array.from(new Set(rows.map((r) => r.studentId)));
+    const studentIds: number[] = Array.from(new Set(rows.map((r) => r.studentId)));
     for (const studentId of studentIds) {
       if (studentId === input.actorUserId) continue;
       await addNotification({

@@ -537,11 +537,11 @@ router.get("/:id/score", async (req, res) => {
     if (!course || course.instructorId !== req.auth!.userId) {
       return res.status(403).json({ message: "Forbidden" });
     }
-    const rows = await prisma.attempt.findMany({
+    const rows: Array<{ score: number; total: number }> = await prisma.attempt.findMany({
       where: { quizId },
       select: { score: true, total: true },
     });
-    const percentages = rows.map((r) =>
+    const percentages: number[] = rows.map((r) =>
       r.total > 0 ? (r.score * 100) / r.total : 0,
     );
     const averagePercentage = percentages.length
@@ -578,11 +578,11 @@ router.get("/:id/score", async (req, res) => {
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
-    const rows = await prisma.attempt.findMany({
+    const rows: Array<{ score: number; total: number }> = await prisma.attempt.findMany({
       where: { quizId, studentId: req.auth!.userId },
       select: { score: true, total: true },
     });
-    const percentages = rows.map((r) =>
+    const percentages: number[] = rows.map((r) =>
       r.total > 0 ? (r.score * 100) / r.total : 0,
     );
     return res.json({
@@ -798,7 +798,18 @@ router.get("/:id/analytics", requireRole("INSTRUCTOR"), async (req, res) => {
   if (legacy.lesson.course.instructorId !== req.auth!.userId) {
     return res.status(403).json({ message: "Forbidden" });
   }
-  const percentages = legacy.attempts.map((a) =>
+  type LegacyAttempt = {
+    id: number;
+    studentId: number;
+    score: number;
+    total: number;
+    createdAt: Date;
+    student: { fullName: string };
+  };
+  type LegacyQuestion = { id: number; prompt: string };
+  const legacyAttempts = legacy.attempts as LegacyAttempt[];
+  const legacyQuestions = legacy.questions as LegacyQuestion[];
+  const percentages: number[] = legacyAttempts.map((a) =>
     a.total > 0 ? (a.score * 100) / a.total : 0,
   );
   return res.json({
@@ -813,8 +824,8 @@ router.get("/:id/analytics", requireRole("INSTRUCTOR"), async (req, res) => {
       createdAt: legacy.createdAt,
     },
     summary: {
-      totalSubmissions: legacy.attempts.length,
-      uniqueStudents: legacy.attempts.length,
+      totalSubmissions: legacyAttempts.length,
+      uniqueStudents: legacyAttempts.length,
       averagePercentage: percentages.length
         ? Number(
             (percentages.reduce((sum, p) => sum + p, 0) / percentages.length).toFixed(2),
@@ -823,7 +834,7 @@ router.get("/:id/analytics", requireRole("INSTRUCTOR"), async (req, res) => {
       highestPercentage: percentages.length ? Math.max(...percentages) : null,
       lowestPercentage: percentages.length ? Math.min(...percentages) : null,
     },
-    submissions: legacy.attempts.map((a) => ({
+    submissions: legacyAttempts.map((a) => ({
       id: a.id,
       studentId: a.studentId,
       fullName: a.student.fullName,
@@ -831,7 +842,7 @@ router.get("/:id/analytics", requireRole("INSTRUCTOR"), async (req, res) => {
       total: a.total,
       createdAt: a.createdAt,
     })),
-    questions: legacy.questions.map((q) => ({
+    questions: legacyQuestions.map((q) => ({
       questionId: q.id,
       prompt: q.prompt,
       correctRate: null,
