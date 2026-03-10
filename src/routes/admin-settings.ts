@@ -8,11 +8,11 @@ router.use(requireAuth);
 const defaultSettings = {
   active_year: "2025",
   active_period: "2",
-  name: "VISAYAS STATE UNIVERSITY",
-  address: "Visca, Baybay City, Leyte",
+  name: "North Eastern Mindanao State University",
+  address: "tandag City, Surigao del Sur",
   online_enrollment:
     '{"enabled":false,"end_date":"2026-02-02","second_year":"2026-01-10","third_year":"2026-01-11","fourth_year":"2026-01-12","ifirst_year":"2026-01-12","isecond_year":"2026-01-12","ithird_year":"2026-01-12","ifourth_year":"2026-01-12","freshmen_enabled":true,"gs_enabled":true,"is_regular":false,"year_enabled":[],"iregular_enabled":[]}',
-  campus: "main",
+  campus: "cantilan",
   tpes_enabled: "1",
   tpes_active_year: "2025",
   tpes_active_sem: "1",
