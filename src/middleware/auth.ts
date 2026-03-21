@@ -32,6 +32,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const secret = process.env.JWT_SECRET;
     if (!secret) return res.status(500).json({ message: "JWT secret is not configured" });
     const decoded = jwt.verify(token, secret) as JwtPayload;
+    if (decoded.role === "GUEST" && decoded.userId === 0) {
+      req.auth = { userId: 0, role: "GUEST" };
+      return next();
+    }
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
       select: { role: true }

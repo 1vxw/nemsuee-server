@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 export type NotificationRole =
   | "STUDENT"
   | "INSTRUCTOR"
+  | "GUEST"
   | "ADMIN"
   | "REGISTRAR"
   | "DEAN";

@@ -78,6 +78,9 @@ async function syncCourseDisplayInstructor(courseId: number) {
 }
 
 router.get("/", async (req, res) => {
+  if (req.auth?.role === "GUEST") {
+    return res.json([]);
+  }
   if (req.auth?.role === "ADMIN") {
     return res.json(await listAdminCourses());
   }

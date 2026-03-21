@@ -43,6 +43,7 @@ async function addNotification(input: {
   recipientRole?:
     | "STUDENT"
     | "INSTRUCTOR"
+    | "GUEST"
     | "ADMIN"
     | "REGISTRAR"
     | "DEAN"
@@ -70,6 +71,10 @@ router.post("/actions", async (req, res) => {
   const actorUserId = req.auth!.userId;
   const actorRole = req.auth!.role;
   const data = parsed.data;
+
+  if (actorRole === "GUEST") {
+    return res.status(403).json({ message: "Guest access is read-only." });
+  }
 
   if (data.courseId) {
     const allowed =
@@ -105,6 +110,7 @@ router.post("/actions", async (req, res) => {
         recipientRole: target.role as
           | "STUDENT"
           | "INSTRUCTOR"
+          | "GUEST"
           | "ADMIN"
           | "REGISTRAR"
           | "DEAN",

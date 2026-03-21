@@ -6,6 +6,7 @@ import {
   promoteSchema,
   registerSchema,
 } from "../modules/auth/schemas.js";
+import { signToken } from "../modules/auth/tokens.js";
 import {
   getInstructorApplications,
   getUserProfile,
@@ -55,6 +56,26 @@ router.post("/login", async (req, res) => {
     const payload = await loginUser(parsed.data);
     res.cookie(AUTH_COOKIE_NAME, payload.token, getCookieOptions(req));
     return res.json({ user: payload.user });
+  } catch (err) {
+    return res
+      .status((err as any).status || 500)
+      .json({ message: (err as Error).message });
+  }
+});
+
+router.post("/guest", async (req, res) => {
+  try {
+    const token = signToken({ userId: 0, role: "GUEST" });
+    res.cookie(AUTH_COOKIE_NAME, token, getCookieOptions(req));
+    return res.json({
+      user: {
+        id: 0,
+        fullName: "Guest",
+        email: "guest@nemsu.edu",
+        role: "GUEST",
+        studentId: null,
+      },
+    });
   } catch (err) {
     return res
       .status((err as any).status || 500)
@@ -127,6 +148,15 @@ router.patch(
 
 router.get("/me", requireAuth, async (req, res) => {
   try {
+    if (req.auth?.role === "GUEST") {
+      return res.json({
+        id: 0,
+        fullName: "Guest",
+        email: "guest@nemsu.edu",
+        role: "GUEST",
+        studentId: null,
+      });
+    }
     const user = await getUserProfile(req.auth!.userId);
     res.json(user);
   } catch (err) {

@@ -8,10 +8,12 @@ import taskRoutes from "./tasks.js";
 import gradeComputationRoutes from "./grade-computation.js";
 import termRoutes from "./terms.js";
 import adminSettingsRoutes from "./admin-settings.js";
+import publicRoutes from "./public.js";
 
 export const apiRouter = Router();
 
 apiRouter.get("/health", (_req, res) => res.json({ ok: true }));
+apiRouter.use("/public", publicRoutes);
 apiRouter.use("/auth", authRoutes);
 apiRouter.use("/courses", courseRoutes);
 apiRouter.use("/quizzes", quizRoutes);
