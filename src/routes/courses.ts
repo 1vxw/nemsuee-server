@@ -258,7 +258,7 @@ router.post("/:id/announcements", requireRole("INSTRUCTOR"), async (req, res) =>
     `SELECT ca.id, ca.message, ca.sectionId, ca.createdAt, s.name as sectionName
      FROM CourseAnnouncement ca
      LEFT JOIN Section s ON s.id = ca.sectionId
-     WHERE rowid = last_insert_rowid()`,
+     WHERE ca.id = last_insert_rowid()`,
   )) as Array<{
     id: number;
     message: string;

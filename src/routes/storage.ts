@@ -110,21 +110,40 @@ router.get("/google/files", requireAuth, async (req, res) => {
   const linked = await getAuthorizedDriveClient(req.auth!.userId);
   if (!linked)
     return res.status(404).json({ message: "Google Drive not linked" });
-  const folderId =
+  const rootFolderId =
     linked.mode === "oauth"
       ? await ensureUserPersonalFolder(req.auth!.userId)
       : process.env.GOOGLE_DRIVE_FOLDER_ID || null;
+  const requestedFolderIdRaw =
+    typeof req.query.folderId === "string" ? req.query.folderId.trim() : "";
+  const folderId = requestedFolderIdRaw || rootFolderId || null;
 
   const result = await linked.drive.files.list({
-    pageSize: 20,
+    pageSize: 200,
     fields:
-      "files(id,name,mimeType,webViewLink,webContentLink,modifiedTime,size)",
+      "files(id,name,mimeType,webViewLink,webContentLink,modifiedTime,size,parents)",
     q: folderId
       ? `'${folderId}' in parents and trashed=false`
       : "trashed=false",
+    orderBy: "folder,name_natural",
   });
+  let parentFolderId: string | null = null;
+  if (folderId) {
+    const folderMeta = await linked.drive.files
+      .get({
+        fileId: folderId,
+        fields: "id,parents",
+      })
+      .catch(() => null);
+    parentFolderId = String(folderMeta?.data?.parents?.[0] || "") || null;
+  }
 
-  return res.json(result.data.files || []);
+  return res.json({
+    rootFolderId,
+    currentFolderId: folderId,
+    parentFolderId,
+    files: result.data.files || [],
+  });
 });
 
 const uploadSchema = z.object({
@@ -132,6 +151,15 @@ const uploadSchema = z.object({
   content: z.string().min(1).optional(),
   contentBase64: z.string().min(1).optional(),
   mimeType: z.string().min(1).optional(),
+});
+
+const createFolderSchema = z.object({
+  name: z.string().min(1),
+  parentId: z.string().min(1).optional(),
+});
+
+const moveFileSchema = z.object({
+  folderId: z.string().optional().nullable(),
 });
 
 router.post(
@@ -203,6 +231,63 @@ router.post(
 },
 );
 
+router.get("/google/folders", requireAuth, async (req, res) => {
+  const linked = await getAuthorizedDriveClient(req.auth!.userId);
+  if (!linked)
+    return res.status(404).json({ message: "Google Drive not linked" });
+  const rootFolderId =
+    linked.mode === "oauth"
+      ? await ensureUserPersonalFolder(req.auth!.userId)
+      : process.env.GOOGLE_DRIVE_FOLDER_ID || null;
+
+  const result = await linked.drive.files.list({
+    pageSize: 200,
+    fields: "files(id,name,modifiedTime)",
+    q: rootFolderId
+      ? `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
+      : "mimeType='application/vnd.google-apps.folder' and trashed=false",
+    orderBy: "name_natural",
+  });
+
+  return res.json({
+    rootFolderId,
+    folders: (result.data.files || []).map((f: any) => ({
+      id: String(f.id || ""),
+      name: String(f.name || "Untitled Folder"),
+      modifiedTime: f.modifiedTime || null,
+    })),
+  });
+});
+
+router.post("/google/folders", requireAuth, async (req, res) => {
+  const parsed = createFolderSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const linked = await getAuthorizedDriveClient(req.auth!.userId);
+  if (!linked)
+    return res.status(404).json({ message: "Google Drive not linked" });
+
+  const rootFolderId =
+    linked.mode === "oauth"
+      ? await ensureUserPersonalFolder(req.auth!.userId)
+      : process.env.GOOGLE_DRIVE_FOLDER_ID || null;
+  const parentId = parsed.data.parentId || rootFolderId || undefined;
+
+  const safeName = await getUniqueUploadName(
+    linked.drive,
+    parentId || null,
+    parsed.data.name,
+  );
+  const created = await linked.drive.files.create({
+    requestBody: {
+      name: safeName,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: parentId ? [parentId] : undefined,
+    },
+    fields: "id,name,mimeType,modifiedTime",
+  });
+  return res.status(201).json(created.data);
+});
+
 router.delete(
   "/google/files/:id",
   requireAuth,
@@ -220,6 +305,37 @@ router.delete(
     res.status(204).send();
   },
 );
+
+router.patch("/google/files/:id/move", requireAuth, async (req, res) => {
+  const fileId = String(req.params.id || "").trim();
+  if (!fileId) return res.status(400).json({ message: "Invalid file id" });
+  const parsed = moveFileSchema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const linked = await getAuthorizedDriveClient(req.auth!.userId);
+  if (!linked) {
+    return res.status(404).json({ message: "Google Drive not linked" });
+  }
+  const rootFolderId =
+    linked.mode === "oauth"
+      ? await ensureUserPersonalFolder(req.auth!.userId)
+      : process.env.GOOGLE_DRIVE_FOLDER_ID || null;
+  const targetFolderId = parsed.data.folderId || rootFolderId || null;
+
+  const current = await linked.drive.files.get({
+    fileId,
+    fields: "id,name,parents",
+  });
+  const previousParents = ((current.data.parents || []) as string[]).join(",");
+
+  const updated = await linked.drive.files.update({
+    fileId,
+    addParents: targetFolderId || undefined,
+    removeParents: previousParents || undefined,
+    fields: "id,name,webViewLink,webContentLink,mimeType,modifiedTime,size,parents",
+  });
+  return res.json(updated.data);
+});
 
 router.delete("/google/disconnect", requireAuth, async (req, res) => {
   if (getGoogleDriveMode() === "service_account") {

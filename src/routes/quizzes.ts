@@ -705,6 +705,177 @@ router.get("/:id/results/me", requireRole("STUDENT"), async (req, res) => {
   });
 });
 
+router.get(
+  "/:id/results/attempt/:attemptId",
+  requireRole("INSTRUCTOR"),
+  async (req, res) => {
+    const quizId = Number(req.params.id);
+    const attemptId = Number(req.params.attemptId);
+    if (!Number.isFinite(quizId) || quizId <= 0) {
+      return res.status(400).json({ message: "Invalid quiz id" });
+    }
+    if (!Number.isFinite(attemptId) || attemptId <= 0) {
+      return res.status(400).json({ message: "Invalid attempt id" });
+    }
+
+    await ensureQuizV2Tables();
+
+    const quizRows = (await prisma.$queryRawUnsafe(
+      `SELECT q.id, q.lessonId, q.courseId, q.sectionId, q.title, q.showResultsImmediately,
+              q.showScoreInStudentScores, q.passingPercentage,
+              l.title as lessonTitle, s.name as sectionName, c.title as courseTitle
+       FROM LessonQuiz q
+       JOIN Lesson l ON l.id = q.lessonId
+       JOIN Section s ON s.id = q.sectionId
+       JOIN Course c ON c.id = q.courseId
+       WHERE q.id = ?`,
+      quizId,
+    )) as Array<any>;
+    const quiz = quizRows[0];
+
+    if (quiz) {
+      if (!(await canAccessSection(req.auth!.userId, quiz.sectionId))) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const submissionRows = (await prisma.$queryRawUnsafe(
+        `SELECT s.*, u.fullName, u.email
+         FROM LessonQuizSubmission s
+         JOIN User u ON u.id = s.studentId
+         WHERE s.id = ? AND s.quizId = ?`,
+        attemptId,
+        quizId,
+      )) as Array<any>;
+      const submission = submissionRows[0];
+      if (!submission) {
+        return res.status(404).json({ message: "Attempt not found" });
+      }
+
+      let parsedPayload: Array<{ questionId: number; answer?: string }> = [];
+      try {
+        parsedPayload = JSON.parse(String(submission.payload || "[]"));
+      } catch {}
+      const answerMap = new Map<number, string>();
+      for (const a of parsedPayload) {
+        answerMap.set(Number(a.questionId), String(a.answer || ""));
+      }
+
+      const questionRows = (await prisma.$queryRawUnsafe(
+        `SELECT id, prompt, optionA, optionB, optionC, optionD, correctAnswer
+         FROM LessonQuizQuestion
+         WHERE quizId = ?
+         ORDER BY id ASC`,
+        quizId,
+      )) as Array<any>;
+
+      const questions = questionRows.map((q) => {
+        const studentAnswer = String(answerMap.get(Number(q.id)) || "");
+        const correctAnswer = String(q.correctAnswer || "");
+        const isCorrect =
+          studentAnswer.trim().toLowerCase() &&
+          correctAnswer.trim().toLowerCase() &&
+          studentAnswer.trim().toLowerCase() === correctAnswer.trim().toLowerCase();
+        return {
+          id: q.id,
+          prompt: q.prompt,
+          optionA: q.optionA,
+          optionB: q.optionB,
+          optionC: q.optionC,
+          optionD: q.optionD,
+          studentAnswer,
+          isCorrect: Boolean(isCorrect),
+          correctAnswer,
+        };
+      });
+
+      return res.json({
+        attemptId: submission.id,
+        submittedAt: submission.createdAt,
+        score: Number(submission.score || 0),
+        total: Number(submission.total || 0),
+        student: {
+          id: Number(submission.studentId),
+          fullName: String(submission.fullName || ""),
+          email: String(submission.email || ""),
+        },
+        quiz: {
+          id: quiz.id,
+          title: quiz.title,
+          lessonId: quiz.lessonId,
+          lessonTitle: quiz.lessonTitle,
+          sectionId: quiz.sectionId,
+          sectionName: quiz.sectionName,
+          courseId: quiz.courseId,
+          courseTitle: quiz.courseTitle,
+          showResultsImmediately: Boolean(quiz.showResultsImmediately),
+          showScoreInStudentScores: Boolean(quiz.showScoreInStudentScores ?? 1),
+          passingPercentage: quiz.passingPercentage ?? 60,
+          canViewAnswerKey: true,
+        },
+        questions,
+      });
+    }
+
+    const legacy = await prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        student: { select: { id: true, fullName: true, email: true } },
+        quiz: {
+          include: {
+            lesson: { include: { course: true, section: true } },
+            questions: true,
+          },
+        },
+      },
+    });
+    if (!legacy || legacy.quizId !== quizId) {
+      return res.status(404).json({ message: "Attempt not found" });
+    }
+    if (legacy.quiz.lesson.course.instructorId !== req.auth!.userId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    return res.json({
+      attemptId: legacy.id,
+      submittedAt: legacy.createdAt,
+      score: Number(legacy.score || 0),
+      total: Number(legacy.total || 0),
+      student: {
+        id: legacy.student.id,
+        fullName: legacy.student.fullName,
+        email: legacy.student.email,
+      },
+      quiz: {
+        id: legacy.quiz.id,
+        title: legacy.quiz.lesson.title,
+        lessonId: legacy.quiz.lessonId,
+        lessonTitle: legacy.quiz.lesson.title,
+        sectionId: legacy.quiz.lesson.sectionId,
+        sectionName: legacy.quiz.lesson.section.name,
+        courseId: legacy.quiz.lesson.courseId,
+        courseTitle: legacy.quiz.lesson.course.title,
+        showResultsImmediately: true,
+        showScoreInStudentScores: true,
+        passingPercentage: 60,
+        canViewAnswerKey: true,
+      },
+      questions: (legacy.quiz.questions || []).map((q: any) => ({
+        id: q.id,
+        prompt: q.prompt,
+        optionA: q.optionA,
+        optionB: q.optionB,
+        optionC: q.optionC,
+        optionD: q.optionD,
+        studentAnswer: null,
+        isCorrect: null,
+        correctAnswer: q.correctOption ?? null,
+      })),
+      note:
+        "Legacy attempts do not store per-question answers, so selected answers are unavailable.",
+    });
+  },
+);
+
 router.get("/:id/analytics", requireRole("INSTRUCTOR"), async (req, res) => {
   const quizId = Number(req.params.id);
   if (!Number.isFinite(quizId) || quizId <= 0) {
