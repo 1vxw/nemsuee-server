@@ -130,6 +130,28 @@ router.get("/teaching-blocks", requireRole("INSTRUCTOR"), async (req, res) => {
   res.json(blocks);
 });
 
+router.get("/:id/enrollment-key", async (req, res) => {
+  const id = Number(req.params.id);
+  const course = await prisma.course.findUnique({
+    where: { id },
+    select: { id: true, enrollmentKey: true },
+  });
+  if (!course) return res.status(404).json({ message: "Course not found" });
+
+  if (req.auth?.role === "ADMIN" || req.auth?.role === "REGISTRAR") {
+    return res.json({ enrollmentKey: course.enrollmentKey });
+  }
+
+  if (
+    req.auth?.role === "INSTRUCTOR" &&
+    (await canAccessCourse(req.auth.userId, id))
+  ) {
+    return res.json({ enrollmentKey: course.enrollmentKey });
+  }
+
+  return res.status(403).json({ message: "Forbidden" });
+});
+
 router.get("/:id/students", async (req, res) => {
   const id = Number(req.params.id);
   const course = await prisma.course.findUnique({ where: { id } });

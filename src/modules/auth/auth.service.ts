@@ -1,6 +1,13 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "../../db.js";
 import { signToken } from "./tokens.js";
+import {
+  buildFrontendLink,
+  renderPasswordResetEmail,
+  renderVerificationEmail,
+  sendMail,
+} from "../../services/mailer.js";
+import { generateOpaqueToken, sha256Hex } from "../../services/tokenUtils.js";
 
 export type RegisterInput = {
   fullName: string;
@@ -11,6 +18,13 @@ export type RegisterInput = {
 };
 
 export type LoginInput = { email: string; password: string };
+
+const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1h
+
+function nowIso() {
+  return new Date().toISOString();
+}
 
 async function ensureStudentIdentityTable() {
   await prisma.$executeRawUnsafe(
@@ -73,6 +87,7 @@ export async function registerUser(input: RegisterInput) {
       fullName,
       email,
       passwordHash,
+      emailVerifiedAt: null,
       role: role as any,
     },
     select: { id: true, fullName: true, email: true, role: true },
@@ -94,6 +109,10 @@ export async function registerUser(input: RegisterInput) {
     );
   }
 
+  await createAndSendEmailVerification(user.id, user.email).catch(() => {
+    // Best-effort: registration succeeds even if SMTP is not configured.
+  });
+
   return {
     ...user,
     studentId: role === "STUDENT" ? studentId! : null,
@@ -109,6 +128,8 @@ export async function loginUser(input: LoginInput) {
       fullName: true,
       email: true,
       passwordHash: true,
+      emailVerifiedAt: true,
+      createdAt: true,
       role: true,
     },
   });
@@ -123,6 +144,24 @@ export async function loginUser(input: LoginInput) {
     const err = new Error("Invalid credentials");
     (err as any).status = 401;
     throw err;
+  }
+
+  if (!user.emailVerifiedAt) {
+    const hasVerificationHistory = await prisma.emailVerificationToken.findFirst({
+      where: { userId: user.id },
+      select: { id: true },
+    });
+
+    if (!hasVerificationHistory) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { emailVerifiedAt: new Date(nowIso()) },
+      });
+    } else {
+      const err = new Error("Email not verified. Please check your inbox.");
+      (err as any).status = 403;
+      throw err;
+    }
   }
 
   if (user.role === "INSTRUCTOR") {
@@ -154,6 +193,145 @@ export async function loginUser(input: LoginInput) {
       studentId,
     },
   };
+}
+
+async function createAndSendEmailVerification(userId: number, email: string) {
+  const token = generateOpaqueToken();
+  const tokenHash = sha256Hex(token);
+  const expiresAt = new Date(Date.now() + EMAIL_VERIFY_TTL_MS).toISOString();
+
+  await prisma.emailVerificationToken.create({
+    data: {
+      userId,
+      tokenHash,
+      expiresAt: new Date(expiresAt),
+      consumedAt: null,
+    },
+  });
+
+  const link = buildFrontendLink("/verify-email", { token });
+  const subject = "Verify your NEMSUEE account";
+  const emailContent = renderVerificationEmail({ actionUrl: link });
+  await sendMail({
+    to: email,
+    subject,
+    html: emailContent.html,
+    text: emailContent.text,
+  });
+}
+
+export async function resendVerificationEmail(emailRaw: string) {
+  const email = emailRaw.trim().toLowerCase();
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, emailVerifiedAt: true },
+  });
+  // Always return success (avoid account enumeration)
+  if (!user || user.emailVerifiedAt) return { ok: true };
+
+  await prisma.emailVerificationToken.deleteMany({
+    where: { userId: user.id, consumedAt: null },
+  });
+  await createAndSendEmailVerification(user.id, email);
+  return { ok: true };
+}
+
+export async function verifyEmailByToken(token: string) {
+  const tokenHash = sha256Hex(token);
+  const row = await prisma.emailVerificationToken.findUnique({
+    where: { tokenHash },
+    select: { id: true, userId: true, expiresAt: true, consumedAt: true },
+  });
+  if (!row || row.consumedAt) {
+    const err = new Error("Invalid or expired verification link.");
+    (err as any).status = 400;
+    throw err;
+  }
+  if (new Date(row.expiresAt).getTime() < Date.now()) {
+    const err = new Error("Invalid or expired verification link.");
+    (err as any).status = 400;
+    throw err;
+  }
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: row.userId },
+      data: { emailVerifiedAt: new Date(nowIso()) },
+    }),
+    prisma.emailVerificationToken.update({
+      where: { id: row.id },
+      data: { consumedAt: new Date(nowIso()) },
+    }),
+  ]);
+  return { ok: true };
+}
+
+export async function requestPasswordReset(emailRaw: string) {
+  const email = emailRaw.trim().toLowerCase();
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, emailVerifiedAt: true, email: true },
+  });
+  // Always return success (avoid account enumeration)
+  if (!user || !user.emailVerifiedAt) return { ok: true };
+
+  await prisma.passwordResetToken.deleteMany({
+    where: { userId: user.id, usedAt: null },
+  });
+
+  const token = generateOpaqueToken();
+  const tokenHash = sha256Hex(token);
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+  await prisma.passwordResetToken.create({
+    data: {
+      userId: user.id,
+      tokenHash,
+      expiresAt: new Date(expiresAt),
+      usedAt: null,
+    },
+  });
+
+  const link = buildFrontendLink("/reset-password", { token });
+  const subject = "Reset your NEMSUEE password";
+  const emailContent = renderPasswordResetEmail({ actionUrl: link });
+  await sendMail({
+    to: user.email,
+    subject,
+    html: emailContent.html,
+    text: emailContent.text,
+  });
+  return { ok: true };
+}
+
+export async function resetPasswordWithToken(token: string, newPassword: string) {
+  const tokenHash = sha256Hex(token);
+  const row = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash },
+    select: { id: true, userId: true, expiresAt: true, usedAt: true },
+  });
+  if (!row || row.usedAt) {
+    const err = new Error("Invalid or expired reset link.");
+    (err as any).status = 400;
+    throw err;
+  }
+  if (new Date(row.expiresAt).getTime() < Date.now()) {
+    const err = new Error("Invalid or expired reset link.");
+    (err as any).status = 400;
+    throw err;
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: row.userId },
+      data: { passwordHash },
+    }),
+    prisma.passwordResetToken.update({
+      where: { id: row.id },
+      data: { usedAt: new Date(nowIso()) },
+    }),
+  ]);
+  return { ok: true };
 }
 
 export async function promoteUserToAdmin(email: string, bootstrapKey: string) {

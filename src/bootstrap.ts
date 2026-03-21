@@ -7,10 +7,25 @@ export async function initDb() {
       fullName TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       passwordHash TEXT NOT NULL,
+      emailVerifiedAt DATETIME,
       role TEXT NOT NULL,
       createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  try {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE User ADD COLUMN emailVerifiedAt DATETIME;
+    `);
+    // Backfill existing accounts created before verification was introduced.
+    await prisma.$executeRawUnsafe(`
+      UPDATE User
+      SET emailVerifiedAt = createdAt
+      WHERE emailVerifiedAt IS NULL;
+    `);
+  } catch {
+    // Column already exists in existing databases.
+  }
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS Course (
@@ -211,4 +226,42 @@ export async function initDb() {
   } catch {
     // Column already exists in existing databases.
   }
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS EmailVerificationToken (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId INTEGER NOT NULL,
+      tokenHash TEXT NOT NULL UNIQUE,
+      expiresAt DATETIME NOT NULL,
+      consumedAt DATETIME,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (userId) REFERENCES User(id) ON DELETE CASCADE
+    );
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS idx_email_verification_user ON EmailVerificationToken(userId);
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS idx_email_verification_expires ON EmailVerificationToken(expiresAt);
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS PasswordResetToken (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId INTEGER NOT NULL,
+      tokenHash TEXT NOT NULL UNIQUE,
+      expiresAt DATETIME NOT NULL,
+      usedAt DATETIME,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (userId) REFERENCES User(id) ON DELETE CASCADE
+    );
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS idx_password_reset_user ON PasswordResetToken(userId);
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON PasswordResetToken(expiresAt);
+  `);
 }

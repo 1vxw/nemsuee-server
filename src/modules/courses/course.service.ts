@@ -34,6 +34,13 @@ const courseInclude = {
 type SectionAccessRow = { courseId: number; sectionId: number };
 type CourseLike = { id: number };
 
+function stripEnrollmentKey<T>(courses: T[]) {
+  return courses.map((course) => {
+    const { enrollmentKey: _enrollmentKey, ...rest } = (course as any) || {};
+    return rest as T;
+  });
+}
+
 async function attachInstructors<T extends CourseLike>(courses: T[]) {
   if (!courses.length) return [];
   const courseIds = Array.from(new Set(courses.map((c) => c.id)));
@@ -84,10 +91,11 @@ export async function listAdminCourses() {
     courses.filter((c: any) => !c.isArchived),
   );
   const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
-  return withInstructors.map((course) => ({
+  const mapped = withInstructors.map((course) => ({
     ...course,
     term: termMap.get(course.id) || null,
   }));
+  return stripEnrollmentKey(mapped);
 }
 
 export async function listInstructorCourses(instructorId: number) {
@@ -112,13 +120,14 @@ export async function listInstructorCourses(instructorId: number) {
     orderBy: { id: "desc" },
   });
   const withInstructors = await attachInstructors(
-    courses.filter((c: any) => !c.isArchived).slice(0, 5),
+    courses.filter((c: any) => !c.isArchived),
   );
   const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
-  return withInstructors.map((course) => ({
+  const mapped = withInstructors.map((course) => ({
     ...course,
     term: termMap.get(course.id) || null,
   }));
+  return stripEnrollmentKey(mapped);
 }
 
 export async function listStudentCourses(studentId: number) {
@@ -165,10 +174,11 @@ export async function listStudentCourses(studentId: number) {
 
   const withInstructors = await attachInstructors(mapped);
   const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
-  return withInstructors.map((course) => ({
+  const mappedWithTerms = withInstructors.map((course) => ({
     ...course,
     term: termMap.get(course.id) || null,
   }));
+  return stripEnrollmentKey(mappedWithTerms);
 }
 
 export async function listCatalogCourses(studentId: number, query: string) {
@@ -259,8 +269,9 @@ export async function listArchivedInstructorCourses(instructorId: number) {
     courses.filter((c: any) => Boolean(c.isArchived)),
   );
   const termMap = await getCourseTermMap(withInstructors.map((c) => c.id));
-  return withInstructors.map((course) => ({
+  const mapped = withInstructors.map((course) => ({
     ...course,
     term: termMap.get(course.id) || null,
   }));
+  return stripEnrollmentKey(mapped);
 }

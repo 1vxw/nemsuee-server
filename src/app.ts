@@ -16,14 +16,22 @@ function normalizeOrigin(value: string) {
   return trimmed.toLowerCase();
 }
 
-const envOrigins = (process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || "")
+const envOrigins = (
+  process.env.ALLOWED_ORIGINS ||
+  process.env.FRONTEND_URL ||
+  ""
+)
   .split(",")
   .map((v) => v.trim())
   .filter(Boolean);
 const devOrigins =
   process.env.NODE_ENV === "production"
     ? []
-    : ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"];
+    : [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+      ];
 const allowedOrigins = Array.from(
   new Set([...envOrigins, ...devOrigins].map((v) => normalizeOrigin(v))),
 );
@@ -32,7 +40,10 @@ app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      if (!allowedOrigins.length || allowedOrigins.includes(normalizeOrigin(origin)))
+      if (
+        !allowedOrigins.length ||
+        allowedOrigins.includes(normalizeOrigin(origin))
+      )
         return cb(null, true);
       return cb(null, false);
     },
@@ -45,7 +56,6 @@ app.use(
     skip: (req, res) => {
       const path = req.path || "";
       if (path === "/robots.txt" || path === "/sitemap.xml") return true;
-      // Drop noise from internet scanners probing random non-API paths.
       if (!path.startsWith("/api") && res.statusCode === 404) return true;
       return false;
     },
@@ -53,7 +63,6 @@ app.use(
 );
 app.use(express.json({ limit: "25mb" }));
 
-// Basic in-memory rate limits (per instance). Prefer a WAF (Cloudflare/Front Door) for stronger protection.
 const apiLimiter = createRateLimiter({
   name: "api",
   windowMs: 10 * 60 * 1000,
@@ -91,23 +100,39 @@ app.get("/robots.txt", (_req, res) => {
   res.type("text/plain").send("User-agent: *\nDisallow: /\n");
 });
 app.get("/sitemap.xml", (_req, res) => {
-  res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>`);
+  res
+    .type("application/xml")
+    .send(
+      `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>`,
+    );
 });
 app.use((req, res, next) => {
   if (!unsafeMethods.has(req.method.toUpperCase())) return next();
   const origin = req.headers.origin as string | undefined;
   if (!origin) return next();
-  if (!allowedOrigins.length || allowedOrigins.includes(normalizeOrigin(origin)))
+  if (
+    !allowedOrigins.length ||
+    allowedOrigins.includes(normalizeOrigin(origin))
+  )
     return next();
   return res.status(403).json({ message: "CSRF blocked: untrusted origin." });
 });
 
 app.use("/api", apiRouter);
 
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  if ((err as any)?.type === "entity.too.large") {
-    return res.status(413).json({ message: "Uploaded file is too large. Max payload is 25MB." });
-  }
-  console.error(err);
-  res.status(500).json({ message: "Internal server error" });
-});
+app.use(
+  (
+    err: unknown,
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    if ((err as any)?.type === "entity.too.large") {
+      return res
+        .status(413)
+        .json({ message: "Uploaded file is too large. Max payload is 25MB." });
+    }
+    console.error(err);
+    res.status(500).json({ message: "Internal server error" });
+  },
+);

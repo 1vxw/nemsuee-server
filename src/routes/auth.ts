@@ -2,9 +2,13 @@ import { Router } from "express";
 import { AUTH_COOKIE_NAME, requireAuth, requireRole } from "../middleware/auth.js";
 import {
   decisionSchema,
+  forgotPasswordSchema,
   loginSchema,
   promoteSchema,
   registerSchema,
+  resendVerificationSchema,
+  resetPasswordSchema,
+  verifyEmailSchema,
 } from "../modules/auth/schemas.js";
 import { signToken } from "../modules/auth/tokens.js";
 import {
@@ -12,8 +16,12 @@ import {
   getUserProfile,
   loginUser,
   promoteUserToAdmin,
+  requestPasswordReset,
   registerUser,
+  resendVerificationEmail,
+  resetPasswordWithToken,
   reviewInstructorApplication,
+  verifyEmailByToken,
 } from "../modules/auth/auth.service.js";
 
 const router = Router();
@@ -56,6 +64,61 @@ router.post("/login", async (req, res) => {
     const payload = await loginUser(parsed.data);
     res.cookie(AUTH_COOKIE_NAME, payload.token, getCookieOptions(req));
     return res.json({ user: payload.user });
+  } catch (err) {
+    return res
+      .status((err as any).status || 500)
+      .json({ message: (err as Error).message });
+  }
+});
+
+router.post("/verify-email", async (req, res) => {
+  const parsed = verifyEmailSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  try {
+    const result = await verifyEmailByToken(parsed.data.token);
+    return res.json(result);
+  } catch (err) {
+    return res
+      .status((err as any).status || 500)
+      .json({ message: (err as Error).message });
+  }
+});
+
+router.post("/resend-verification", async (req, res) => {
+  const parsed = resendVerificationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  try {
+    const result = await resendVerificationEmail(parsed.data.email);
+    return res.json(result);
+  } catch (err) {
+    return res
+      .status((err as any).status || 500)
+      .json({ message: (err as Error).message });
+  }
+});
+
+router.post("/forgot-password", async (req, res) => {
+  const parsed = forgotPasswordSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  try {
+    const result = await requestPasswordReset(parsed.data.email);
+    return res.json(result);
+  } catch (err) {
+    return res
+      .status((err as any).status || 500)
+      .json({ message: (err as Error).message });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  const parsed = resetPasswordSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  try {
+    const result = await resetPasswordWithToken(
+      parsed.data.token,
+      parsed.data.password,
+    );
+    return res.json(result);
   } catch (err) {
     return res
       .status((err as any).status || 500)
