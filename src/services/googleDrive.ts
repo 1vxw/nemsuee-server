@@ -8,6 +8,25 @@ const SCOPES = [
   "https://www.googleapis.com/auth/drive.metadata.readonly",
 ];
 
+function shouldUnlinkOAuthConnection(err: unknown) {
+  const anyErr = err as any;
+  const apiError = String(anyErr?.response?.data?.error || "").toLowerCase();
+  if (apiError === "invalid_grant") return true;
+
+  const message = String(
+    anyErr?.response?.data?.error_description ||
+      anyErr?.cause?.message ||
+      anyErr?.message ||
+      "",
+  ).toLowerCase();
+
+  if (message.includes("invalid_grant")) return true;
+  if (message.includes("no refresh token")) return true;
+  if (message.includes("refresh handler callback")) return true;
+
+  return false;
+}
+
 function requireEnv(name: string) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not configured`);
@@ -123,6 +142,25 @@ export async function getAuthorizedDriveClient(userId: number) {
       },
     });
   });
+
+  // Force an early refresh (if needed). If Google returns invalid_grant, the
+  // stored refresh token has been revoked/expired or no longer matches this
+  // OAuth client, so we unlink to let the user re-connect.
+  try {
+    await client.getAccessToken();
+  } catch (err) {
+    if (shouldUnlinkOAuthConnection(err)) {
+      console.warn("Google Drive OAuth link invalid; unlinking", {
+        userId,
+        reason: (err as any)?.response?.data?.error || (err as any)?.message,
+      });
+      await prisma.googleDriveConnection
+        .delete({ where: { userId } })
+        .catch(() => {});
+      return null;
+    }
+    throw err;
+  }
 
   const drive = google.drive({ version: "v3", auth: client });
   const raw = (await prisma.$queryRawUnsafe(
