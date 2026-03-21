@@ -31,13 +31,18 @@ router.get("/courses/catalog", async (req, res) => {
     take: 50,
   });
 
+  type CatalogCourseRow = (typeof courses)[number];
+
   res.json(
-    courses.map((c) => ({
-      id: c.id,
-      title: c.title,
-      description: c.description,
-      instructor: { fullName: c.instructor?.fullName || "TBA" },
-      sections: c.sections.map((s) => ({ id: s.id, name: s.name })),
+    courses.map((course: CatalogCourseRow) => ({
+      id: course.id,
+      title: course.title,
+      description: course.description,
+      instructor: { fullName: course.instructor?.fullName || "TBA" },
+      sections: course.sections.map((section: { id: number; name: string }) => ({
+        id: section.id,
+        name: section.name,
+      })),
       enrollmentStatus: null,
     })),
   );
