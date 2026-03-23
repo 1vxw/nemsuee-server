@@ -2,6 +2,7 @@ node_modules
 dist
 # Keep environment variables out of version control
 .env
+prisma/dev.db
 
 /generated/prisma
 
