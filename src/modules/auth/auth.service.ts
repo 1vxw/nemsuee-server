@@ -236,6 +236,151 @@ export async function resendVerificationEmail(emailRaw: string) {
   return { ok: true };
 }
 
+export async function getAccountActivationStatus(emailRaw: string) {
+  const email = emailRaw.trim().toLowerCase();
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      fullName: true,
+      email: true,
+      role: true,
+      createdAt: true,
+      emailVerifiedAt: true,
+    },
+  });
+
+  if (!user) {
+    return {
+      found: false,
+      email,
+      activationSummary: "No account matched that email address.",
+      nextSteps: [
+        "Check the email spelling you entered.",
+        "Register a new account if you have not signed up yet.",
+      ],
+    };
+  }
+
+  const latestVerificationToken = await prisma.emailVerificationToken.findFirst({
+    where: { userId: user.id },
+    orderBy: { createdAt: "desc" },
+    select: {
+      createdAt: true,
+      expiresAt: true,
+      consumedAt: true,
+    },
+  });
+
+  const studentId =
+    user.role === "STUDENT" ? await getStudentIdByUserId(user.id) : null;
+  const instructorApplication =
+    user.role === "INSTRUCTOR"
+      ? ((await prisma.$queryRawUnsafe(
+          `SELECT status, note, createdAt, reviewedAt
+           FROM InstructorApplication
+           WHERE userId = ?
+           LIMIT 1`,
+          user.id,
+        )) as Array<{
+          status: string;
+          note: string | null;
+          createdAt: string;
+          reviewedAt: string | null;
+        }>)[0] || null
+      : null;
+
+  let verificationState: "VERIFIED" | "PENDING" | "EXPIRED" | "NOT_SENT" =
+    "NOT_SENT";
+  if (user.emailVerifiedAt) {
+    verificationState = "VERIFIED";
+  } else if (latestVerificationToken) {
+    verificationState =
+      new Date(latestVerificationToken.expiresAt).getTime() >= Date.now()
+        ? "PENDING"
+        : "EXPIRED";
+  }
+
+  const nextSteps: string[] = [];
+  if (!user.emailVerifiedAt) {
+    nextSteps.push(
+      verificationState === "EXPIRED"
+        ? "Request a new verification email, then open the newest activation link."
+        : "Open the verification email in your inbox and activate the account.",
+    );
+  }
+
+  if (user.role === "INSTRUCTOR") {
+    const approvalStatus = instructorApplication?.status || "PENDING";
+    if (approvalStatus === "PENDING") {
+      nextSteps.push("Wait for admin approval before signing in as instructor.");
+    } else if (approvalStatus === "REJECTED") {
+      nextSteps.push(
+        "Review the rejection note below and contact the administrator if needed.",
+      );
+    } else {
+      nextSteps.push("Your instructor approval is complete. You can sign in after email verification.");
+    }
+  } else {
+    nextSteps.push(
+      user.emailVerifiedAt
+        ? "Your student account is active and ready for sign-in."
+        : "Student access will be available immediately after email verification.",
+    );
+  }
+
+  const activationSummary =
+    user.role === "INSTRUCTOR"
+      ? !user.emailVerifiedAt
+        ? "Instructor account created. Email verification and admin approval are required."
+        : instructorApplication?.status === "APPROVED"
+          ? "Instructor account is fully activated."
+          : instructorApplication?.status === "REJECTED"
+            ? "Instructor account was reviewed but not approved."
+            : "Email is verified. Instructor account is still awaiting admin approval."
+      : user.emailVerifiedAt
+        ? "Student account is fully activated."
+        : "Student account is waiting for email verification.";
+
+  return {
+    found: true,
+    email: user.email,
+    fullName: user.fullName,
+    role: user.role,
+    createdAt: user.createdAt.toISOString(),
+    activationSummary,
+    emailVerified: Boolean(user.emailVerifiedAt),
+    emailVerifiedAt: user.emailVerifiedAt?.toISOString() || null,
+    verification: {
+      state: verificationState,
+      lastSentAt: latestVerificationToken?.createdAt.toISOString() || null,
+      expiresAt: latestVerificationToken?.expiresAt.toISOString() || null,
+    },
+    student:
+      user.role === "STUDENT"
+        ? {
+            studentId,
+            enrollmentReadiness: user.emailVerifiedAt ? "READY" : "PENDING_EMAIL_VERIFICATION",
+          }
+        : null,
+    instructor:
+      user.role === "INSTRUCTOR"
+        ? {
+            approvalStatus: instructorApplication?.status || "PENDING",
+            note: instructorApplication?.note || null,
+            appliedAt: instructorApplication?.createdAt || null,
+            reviewedAt: instructorApplication?.reviewedAt || null,
+            portalReadiness:
+              user.emailVerifiedAt &&
+              (instructorApplication?.status || "PENDING") === "APPROVED"
+                ? "READY"
+                : "PENDING",
+          }
+        : null,
+    nextSteps,
+  };
+}
+
 export async function verifyEmailByToken(token: string) {
   const tokenHash = sha256Hex(token);
   const row = await prisma.emailVerificationToken.findUnique({

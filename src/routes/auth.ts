@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { AUTH_COOKIE_NAME, requireAuth, requireRole } from "../middleware/auth.js";
 import {
+  accountStatusSchema,
   decisionSchema,
   forgotPasswordSchema,
   loginSchema,
@@ -12,6 +13,7 @@ import {
 } from "../modules/auth/schemas.js";
 import { signToken } from "../modules/auth/tokens.js";
 import {
+  getAccountActivationStatus,
   getInstructorApplications,
   getUserProfile,
   loginUser,
@@ -89,6 +91,19 @@ router.post("/resend-verification", async (req, res) => {
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
   try {
     const result = await resendVerificationEmail(parsed.data.email);
+    return res.json(result);
+  } catch (err) {
+    return res
+      .status((err as any).status || 500)
+      .json({ message: (err as Error).message });
+  }
+});
+
+router.post("/account-status", async (req, res) => {
+  const parsed = accountStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  try {
+    const result = await getAccountActivationStatus(parsed.data.email);
     return res.json(result);
   } catch (err) {
     return res

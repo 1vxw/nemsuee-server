@@ -65,3 +65,7 @@ export const verifyEmailSchema = z.object({
 export const resendVerificationSchema = z.object({
   email: z.string().email(),
 });
+
+export const accountStatusSchema = z.object({
+  email: z.string().email(),
+});
