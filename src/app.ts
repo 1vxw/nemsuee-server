@@ -4,6 +4,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import { apiRouter } from "./routes/index.js";
 import { createRateLimiter } from "./middleware/rateLimit.js";
+import { createApiAccessGate } from "./middleware/apiAccessGate.js";
 
 export const app = express();
 app.set("trust proxy", 1);
@@ -118,7 +119,7 @@ app.use((req, res, next) => {
   return res.status(403).json({ message: "CSRF blocked: untrusted origin." });
 });
 
-app.use("/api", apiRouter);
+app.use("/api", createApiAccessGate(allowedOrigins), apiRouter);
 
 app.use(
   (
