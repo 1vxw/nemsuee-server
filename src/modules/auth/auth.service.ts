@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
 import { signToken } from "./tokens.js";
 import {
@@ -84,7 +85,7 @@ export async function registerUser(input: RegisterInput) {
   const passwordHash = await bcrypt.hash(password, 10);
   let user: { id: number; fullName: string; email: string; role: string };
   try {
-    user = await prisma.$transaction(async (tx) => {
+    user = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const created = await tx.user.create({
         data: {
           fullName,
