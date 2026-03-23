@@ -5,15 +5,6 @@ function normalizeOrigin(value: string) {
   return value.trim().replace(/\/+$/, "").toLowerCase();
 }
 
-function toOriginFromUrl(value: string) {
-  try {
-    const parsed = new URL(value);
-    return normalizeOrigin(parsed.origin);
-  } catch {
-    return "";
-  }
-}
-
 function pickFirstHeader(value: string | string[] | undefined) {
   if (!value) return "";
   return Array.isArray(value) ? String(value[0] || "").trim() : value.trim();
@@ -22,11 +13,7 @@ function pickFirstHeader(value: string | string[] | undefined) {
 function isTrustedWebRequest(req: Request, trustedOrigins: Set<string>) {
   if (!trustedOrigins.size) return false;
   const origin = pickFirstHeader(req.headers.origin as string | string[] | undefined);
-  if (origin && trustedOrigins.has(normalizeOrigin(origin))) return true;
-  const referer = pickFirstHeader(req.headers.referer as string | string[] | undefined);
-  if (!referer) return false;
-  const refererOrigin = toOriginFromUrl(referer);
-  return Boolean(refererOrigin && trustedOrigins.has(refererOrigin));
+  return Boolean(origin && trustedOrigins.has(normalizeOrigin(origin)));
 }
 
 function readApiKey(req: Request) {

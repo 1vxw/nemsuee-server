@@ -6,8 +6,13 @@ import { emitNotificationAction } from "../services/notifications.js";
 
 const router = Router();
 router.use(requireAuth);
+let ensuredTasksTables: Promise<void> | null = null;
 
 async function ensureTasksTables() {
+  if (ensuredTasksTables) {
+    return ensuredTasksTables;
+  }
+  ensuredTasksTables = (async () => {
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS CourseTask (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,6 +53,8 @@ async function ensureTasksTables() {
       UNIQUE(taskId, studentId)
     )`,
   );
+  })();
+  return ensuredTasksTables;
 }
 
 router.get("/course/:courseId", async (req, res) => {

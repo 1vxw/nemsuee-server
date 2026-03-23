@@ -82,31 +82,56 @@ export async function registerUser(input: RegisterInput) {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const user = await prisma.user.create({
-    data: {
-      fullName,
-      email,
-      passwordHash,
-      emailVerifiedAt: null,
-      role: role as any,
-    },
-    select: { id: true, fullName: true, email: true, role: true },
-  });
-  if (role === "STUDENT") {
-    await ensureStudentIdentityTable();
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO StudentIdentity (userId, studentId) VALUES (?, ?)`,
-      user.id,
-      studentId!,
-    );
-  }
+  let user: { id: number; fullName: string; email: string; role: string };
+  try {
+    user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          fullName,
+          email,
+          passwordHash,
+          emailVerifiedAt: null,
+          role: role as any,
+        },
+        select: { id: true, fullName: true, email: true, role: true },
+      });
 
-  if (role === "INSTRUCTOR") {
-    await prisma.$executeRawUnsafe(
-      `INSERT OR REPLACE INTO InstructorApplication (userId, status, reviewedBy, reviewedAt, note)
-       VALUES (?, 'PENDING', NULL, NULL, NULL)`,
-      user.id,
-    );
+      if (role === "STUDENT") {
+        await ensureStudentIdentityTable();
+        await tx.$executeRawUnsafe(
+          `INSERT INTO StudentIdentity (userId, studentId) VALUES (?, ?)`,
+          created.id,
+          studentId!,
+        );
+      }
+
+      if (role === "INSTRUCTOR") {
+        await tx.$executeRawUnsafe(
+          `INSERT OR REPLACE INTO InstructorApplication (userId, status, reviewedBy, reviewedAt, note)
+           VALUES (?, 'PENDING', NULL, NULL, NULL)`,
+          created.id,
+        );
+      }
+
+      return created;
+    });
+  } catch (error) {
+    const message = String((error as Error)?.message || "");
+    const lower = message.toLowerCase();
+    if (
+      lower.includes("studentidentity.studentid") ||
+      lower.includes("unique constraint failed: studentidentity.studentid")
+    ) {
+      const err = new Error("Student ID already exists");
+      (err as any).status = 409;
+      throw err;
+    }
+    if (lower.includes("unique constraint failed: user.email")) {
+      const err = new Error("Email already exists");
+      (err as any).status = 409;
+      throw err;
+    }
+    throw error;
   }
 
   await createAndSendEmailVerification(user.id, user.email).catch(() => {
@@ -147,21 +172,9 @@ export async function loginUser(input: LoginInput) {
   }
 
   if (!user.emailVerifiedAt) {
-    const hasVerificationHistory = await prisma.emailVerificationToken.findFirst({
-      where: { userId: user.id },
-      select: { id: true },
-    });
-
-    if (!hasVerificationHistory) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { emailVerifiedAt: new Date(nowIso()) },
-      });
-    } else {
-      const err = new Error("Email not verified. Please check your inbox.");
-      (err as any).status = 403;
-      throw err;
-    }
+    const err = new Error("Email not verified. Please check your inbox.");
+    (err as any).status = 403;
+    throw err;
   }
 
   if (user.role === "INSTRUCTOR") {
@@ -252,12 +265,22 @@ export async function getAccountActivationStatus(emailRaw: string) {
 
   if (!user) {
     return {
-      found: false,
+      found: true,
       email,
-      activationSummary: "No account matched that email address.",
+      activationSummary:
+        "If an account exists for this email, verification and activation details are available through your inbox.",
+      verification: {
+        state: "NOT_SENT" as const,
+        lastSentAt: null,
+        expiresAt: null,
+      },
+      emailVerified: false,
+      emailVerifiedAt: null,
+      student: null,
+      instructor: null,
       nextSteps: [
-        "Check the email spelling you entered.",
-        "Register a new account if you have not signed up yet.",
+        "Check your inbox and spam/junk folders for verification messages.",
+        "Use the resend verification action if you still cannot find an email.",
       ],
     };
   }
@@ -272,8 +295,6 @@ export async function getAccountActivationStatus(emailRaw: string) {
     },
   });
 
-  const studentId =
-    user.role === "STUDENT" ? await getStudentIdByUserId(user.id) : null;
   const instructorApplication =
     user.role === "INSTRUCTOR"
       ? ((await prisma.$queryRawUnsafe(
@@ -344,10 +365,7 @@ export async function getAccountActivationStatus(emailRaw: string) {
 
   return {
     found: true,
-    email: user.email,
-    fullName: user.fullName,
-    role: user.role,
-    createdAt: user.createdAt.toISOString(),
+    email,
     activationSummary,
     emailVerified: Boolean(user.emailVerifiedAt),
     emailVerifiedAt: user.emailVerifiedAt?.toISOString() || null,
@@ -356,19 +374,13 @@ export async function getAccountActivationStatus(emailRaw: string) {
       lastSentAt: latestVerificationToken?.createdAt.toISOString() || null,
       expiresAt: latestVerificationToken?.expiresAt.toISOString() || null,
     },
-    student:
-      user.role === "STUDENT"
-        ? {
-            studentId,
-            enrollmentReadiness: user.emailVerifiedAt ? "READY" : "PENDING_EMAIL_VERIFICATION",
-          }
-        : null,
+    student: null,
     instructor:
       user.role === "INSTRUCTOR"
         ? {
-            approvalStatus: instructorApplication?.status || "PENDING",
-            note: instructorApplication?.note || null,
-            appliedAt: instructorApplication?.createdAt || null,
+          approvalStatus: instructorApplication?.status || "PENDING",
+            note: null,
+            appliedAt: null,
             reviewedAt: instructorApplication?.reviewedAt || null,
             portalReadiness:
               user.emailVerifiedAt &&

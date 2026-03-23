@@ -15,8 +15,13 @@ import { emitNotificationAction } from "../services/notifications.js";
 
 const router = Router();
 router.use(requireAuth);
+let ensuredGradeTables: Promise<void> | null = null;
 
 async function ensureTable() {
+  if (ensuredGradeTables) {
+    return ensuredGradeTables;
+  }
+  ensuredGradeTables = (async () => {
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS GradeComputation (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +165,8 @@ async function ensureTable() {
   try {
     await prisma.$executeRawUnsafe(`ALTER TABLE GradeWeightProfile ADD COLUMN finalsWeight REAL NOT NULL DEFAULT 50`);
   } catch {}
+  })();
+  return ensuredGradeTables;
 }
 
 async function getActiveGradingContext() {

@@ -11,8 +11,13 @@ import {
 
 const router = Router();
 router.use(requireAuth);
+let ensuredQuizV2Tables: Promise<void> | null = null;
 
 async function ensureQuizV2Tables() {
+  if (ensuredQuizV2Tables) {
+    return ensuredQuizV2Tables;
+  }
+  ensuredQuizV2Tables = (async () => {
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS LessonQuiz (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +88,8 @@ async function ensureQuizV2Tables() {
       createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
   );
+  })();
+  return ensuredQuizV2Tables;
 }
 
 router.get("/course/:courseId", async (req, res) => {

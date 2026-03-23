@@ -36,15 +36,18 @@ const devOrigins =
 const allowedOrigins = Array.from(
   new Set([...envOrigins, ...devOrigins].map((v) => normalizeOrigin(v))),
 );
+const isProduction = process.env.NODE_ENV === "production";
+if (isProduction && !allowedOrigins.length) {
+  throw new Error(
+    "ALLOWED_ORIGINS (or FRONTEND_URL) must be configured in production.",
+  );
+}
 
 app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      if (
-        !allowedOrigins.length ||
-        allowedOrigins.includes(normalizeOrigin(origin))
-      )
+      if (allowedOrigins.includes(normalizeOrigin(origin)))
         return cb(null, true);
       return cb(null, false);
     },
@@ -89,12 +92,18 @@ const promoteAdminLimiter = createRateLimiter({
   windowMs: 60 * 60 * 1000,
   max: 5,
 });
+const accountStatusLimiter = createRateLimiter({
+  name: "auth_account_status",
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+});
 
 app.use("/api", apiLimiter);
 app.use("/api/auth", authLimiter);
 app.use("/api/auth/login", loginLimiter);
 app.use("/api/auth/register", registerLimiter);
 app.use("/api/auth/promote-admin", promoteAdminLimiter);
+app.use("/api/auth/account-status", accountStatusLimiter);
 
 // Optional: avoid 404 spam for common crawler endpoints.
 app.get("/robots.txt", (_req, res) => {
@@ -111,10 +120,7 @@ app.use((req, res, next) => {
   if (!unsafeMethods.has(req.method.toUpperCase())) return next();
   const origin = req.headers.origin as string | undefined;
   if (!origin) return next();
-  if (
-    !allowedOrigins.length ||
-    allowedOrigins.includes(normalizeOrigin(origin))
-  )
+  if (allowedOrigins.includes(normalizeOrigin(origin)))
     return next();
   return res.status(403).json({ message: "CSRF blocked: untrusted origin." });
 });

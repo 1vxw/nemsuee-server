@@ -36,8 +36,13 @@ import {
 
 const router = Router();
 router.use(requireAuth);
+let ensuredAnnouncementsTable: Promise<void> | null = null;
 
 async function ensureAnnouncementsTable() {
+  if (ensuredAnnouncementsTable) {
+    return ensuredAnnouncementsTable;
+  }
+  ensuredAnnouncementsTable = (async () => {
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS CourseAnnouncement (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +60,8 @@ async function ensureAnnouncementsTable() {
   } catch {
     // Column already exists.
   }
+  })();
+  return ensuredAnnouncementsTable;
 }
 
 async function syncCourseDisplayInstructor(courseId: number) {
@@ -470,11 +477,29 @@ router.get(
     });
     if (!section || section.courseId !== courseId)
       return res.status(404).json({ message: "Section not found" });
-    if (
-      req.auth!.role === "INSTRUCTOR" &&
-      !(await canAccessSection(req.auth!.userId, sectionId))
-    )
+    const role = req.auth!.role;
+    if (role === "ADMIN" || role === "REGISTRAR") {
+      // Authorized by elevated role.
+    } else if (role === "INSTRUCTOR") {
+      if (!(await canAccessSection(req.auth!.userId, sectionId))) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+    } else if (role === "STUDENT") {
+      const enrollment = await prisma.enrollment.findUnique({
+        where: {
+          courseId_studentId: { courseId, studentId: req.auth!.userId },
+        },
+      });
+      if (
+        !enrollment ||
+        enrollment.status !== "APPROVED" ||
+        enrollment.sectionId !== sectionId
+      ) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+    } else {
       return res.status(403).json({ message: "Forbidden" });
+    }
 
     const rows = (await prisma.$queryRawUnsafe(
       `SELECT bi.id, bi.role, u.id AS instructorId, u.fullName, u.email
