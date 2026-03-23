@@ -31,9 +31,10 @@ export function createApiAccessGate(rawOrigins: string[]) {
   const trustedOrigins = new Set(
     rawOrigins.map((origin) => normalizeOrigin(origin)).filter(Boolean),
   );
+  const allowlistedPaths = new Set<string>(["/health", "/storage/google/callback"]);
 
   return async (req: Request, res: Response, next: NextFunction) => {
-    if (req.path === "/health") return next();
+    if (allowlistedPaths.has(req.path)) return next();
     const settings = await getAdminSettings();
     const security = settings.api_security;
 
