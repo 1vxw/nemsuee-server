@@ -72,26 +72,31 @@ const apiLimiter = createRateLimiter({
   windowMs: 10 * 60 * 1000,
   max: 1200,
 });
+
 const authLimiter = createRateLimiter({
   name: "auth",
   windowMs: 10 * 60 * 1000,
   max: 120,
 });
+
 const loginLimiter = createRateLimiter({
   name: "auth_login",
   windowMs: 10 * 60 * 1000,
   max: 30,
 });
+
 const registerLimiter = createRateLimiter({
   name: "auth_register",
   windowMs: 60 * 60 * 1000,
   max: 15,
 });
+
 const promoteAdminLimiter = createRateLimiter({
   name: "auth_promote_admin",
   windowMs: 60 * 60 * 1000,
   max: 5,
 });
+
 const accountStatusLimiter = createRateLimiter({
   name: "auth_account_status",
   windowMs: 10 * 60 * 1000,
@@ -105,7 +110,6 @@ app.use("/api/auth/register", registerLimiter);
 app.use("/api/auth/promote-admin", promoteAdminLimiter);
 app.use("/api/auth/account-status", accountStatusLimiter);
 
-// Optional: avoid 404 spam for common crawler endpoints.
 app.get("/robots.txt", (_req, res) => {
   res.type("text/plain").send("User-agent: *\nDisallow: /\n");
 });
@@ -116,6 +120,7 @@ app.get("/sitemap.xml", (_req, res) => {
       `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>`,
     );
 });
+
 app.use((req, res, next) => {
   if (!unsafeMethods.has(req.method.toUpperCase())) return next();
   const origin = req.headers.origin as string | undefined;

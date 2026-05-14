@@ -94,55 +94,92 @@ export async function emitNotificationAction(input: {
     }
   }
 
-  if (
-    (visibility === "GLOBAL_STUDENTS" || visibility === "GLOBAL_ALL") &&
-    input.courseId
-  ) {
-    const rows: Array<{ studentId: number }> = await prisma.enrollment.findMany({
-      where: {
-        courseId: input.courseId,
-        status: "APPROVED",
-        ...(input.sectionId ? { sectionId: input.sectionId } : {}),
-      },
-      select: { studentId: true },
-    });
-    const studentIds: number[] = Array.from(new Set(rows.map((r) => r.studentId)));
-    for (const studentId of studentIds) {
-      if (studentId === input.actorUserId) continue;
+  if (visibility === "GLOBAL_STUDENTS" || visibility === "GLOBAL_ALL") {
+    if (input.courseId) {
+      // Broadcast to enrolled students in a specific course
+      const rows: Array<{ studentId: number }> = await prisma.enrollment.findMany({
+        where: {
+          courseId: input.courseId,
+          status: "APPROVED",
+          ...(input.sectionId ? { sectionId: input.sectionId } : {}),
+        },
+        select: { studentId: true },
+      });
+      const studentIds: number[] = Array.from(new Set(rows.map((r) => r.studentId)));
+      for (const studentId of studentIds) {
+        if (studentId === input.actorUserId) continue;
+        await addNotification({
+          actionType: input.actionType,
+          message: input.message,
+          actorUserId: input.actorUserId,
+          recipientUserId: studentId,
+          recipientRole: "STUDENT",
+          courseId: input.courseId,
+          sectionId: input.sectionId,
+        });
+      }
+    } else {
+      // Create a public notification for ALL students (role-based)
       await addNotification({
         actionType: input.actionType,
         message: input.message,
         actorUserId: input.actorUserId,
-        recipientUserId: studentId,
+        recipientUserId: null,
         recipientRole: "STUDENT",
-        courseId: input.courseId,
-        sectionId: input.sectionId,
+        courseId: null,
+        sectionId: null,
       });
     }
   }
 
-  if (
-    (visibility === "COURSE_INSTRUCTORS" || visibility === "GLOBAL_ALL") &&
-    input.courseId
-  ) {
-    const instructorRows = (await prisma.$queryRawUnsafe(
-      `SELECT DISTINCT bi.instructorId
-       FROM BlockInstructor bi
-       JOIN Section s ON s.id = bi.sectionId
-       WHERE s.courseId = ?`,
-      input.courseId,
-    )) as Array<{ instructorId: number }>;
-    const instructorIds = Array.from(new Set(instructorRows.map((r) => r.instructorId)));
-    for (const instructorId of instructorIds) {
-      if (instructorId === input.actorUserId) continue;
+  if (visibility === "COURSE_INSTRUCTORS" || visibility === "GLOBAL_ALL") {
+    if (input.courseId) {
+      // Broadcast to instructors of a specific course
+      const instructorRows = (await prisma.$queryRawUnsafe(
+        `SELECT DISTINCT bi.instructorId
+         FROM BlockInstructor bi
+         JOIN Section s ON s.id = bi.sectionId
+         WHERE s.courseId = ?`,
+        input.courseId,
+      )) as Array<{ instructorId: number }>;
+      const instructorIds = Array.from(new Set(instructorRows.map((r) => r.instructorId)));
+      for (const instructorId of instructorIds) {
+        if (instructorId === input.actorUserId) continue;
+        await addNotification({
+          actionType: input.actionType,
+          message: input.message,
+          actorUserId: input.actorUserId,
+          recipientUserId: instructorId,
+          recipientRole: "INSTRUCTOR",
+          courseId: input.courseId,
+          sectionId: input.sectionId,
+        });
+      }
+    } else if (visibility === "GLOBAL_ALL") {
+      // Create a public notification for ALL instructors (role-based)
       await addNotification({
         actionType: input.actionType,
         message: input.message,
         actorUserId: input.actorUserId,
-        recipientUserId: instructorId,
+        recipientUserId: null,
         recipientRole: "INSTRUCTOR",
-        courseId: input.courseId,
-        sectionId: input.sectionId,
+        courseId: null,
+        sectionId: null,
+      });
+    }
+  }
+
+  if (visibility === "GLOBAL_ALL" && !input.courseId) {
+    const allRoles: NotificationRole[] = ["ADMIN", "REGISTRAR", "DEAN", "GUEST"];
+    for (const role of allRoles) {
+      await addNotification({
+        actionType: input.actionType,
+        message: input.message,
+        actorUserId: input.actorUserId,
+        recipientUserId: null,
+        recipientRole: role,
+        courseId: null,
+        sectionId: null,
       });
     }
   }

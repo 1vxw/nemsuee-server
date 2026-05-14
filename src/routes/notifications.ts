@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { canAccessCourse } from "../modules/courses/access.js";
+import type { NotificationRole } from "../services/notifications.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -122,8 +123,8 @@ router.post("/actions", async (req, res) => {
 
   // Global/broadcast handling.
   if (data.visibility === "GLOBAL_STUDENTS" || data.visibility === "GLOBAL_ALL") {
-    // Broadcast to students only when action is related to a course.
     if (data.courseId) {
+      // Broadcast to enrolled students in a specific course
       const rows: Array<{ studentId: number }> = await prisma.enrollment.findMany({
         where: { courseId: data.courseId, status: "APPROVED" },
         select: { studentId: true },
@@ -141,11 +142,23 @@ router.post("/actions", async (req, res) => {
           sectionId: data.sectionId,
         });
       }
+    } else {
+      // Create a public notification for ALL students in the system (role-based)
+      await addNotification({
+        actionType: data.actionType,
+        message: data.message,
+        actorUserId,
+        recipientUserId: null,
+        recipientRole: "STUDENT",
+        courseId: null,
+        sectionId: null,
+      });
     }
   }
 
   if (data.visibility === "COURSE_INSTRUCTORS" || data.visibility === "GLOBAL_ALL") {
     if (data.courseId) {
+      // Broadcast to instructors of a specific course
       const instructorRows = (await prisma.$queryRawUnsafe(
         `SELECT DISTINCT bi.instructorId
          FROM BlockInstructor bi
@@ -168,6 +181,34 @@ router.post("/actions", async (req, res) => {
           sectionId: data.sectionId,
         });
       }
+    } else if (data.visibility === "GLOBAL_ALL") {
+      // Create a public notification for ALL instructors in the system (role-based)
+      await addNotification({
+        actionType: data.actionType,
+        message: data.message,
+        actorUserId,
+        recipientUserId: null,
+        recipientRole: "INSTRUCTOR",
+        courseId: null,
+        sectionId: null,
+      });
+    }
+  }
+
+  // If GLOBAL_ALL without courseId, also notify other roles
+  if (data.visibility === "GLOBAL_ALL" && !data.courseId) {
+    // Create public notifications for all user roles
+    const allRoles: NotificationRole[] = ["ADMIN", "REGISTRAR", "DEAN", "GUEST"];
+    for (const role of allRoles) {
+      await addNotification({
+        actionType: data.actionType,
+        message: data.message,
+        actorUserId,
+        recipientUserId: null,
+        recipientRole: role,
+        courseId: null,
+        sectionId: null,
+      });
     }
   }
 
@@ -222,11 +263,14 @@ router.patch("/read-all", async (req, res) => {
 router.delete("/clear", async (req, res) => {
   await ensureNotificationsTable();
   const userId = req.auth!.userId;
+  const role = req.auth!.role;
 
   await prisma.$executeRawUnsafe(
     `DELETE FROM NotificationEvent
-     WHERE recipientUserId = ?`,
+     WHERE recipientUserId = ?
+        OR (recipientUserId IS NULL AND recipientRole = ?)`,
     userId,
+    role,
   );
 
   return res.json({ ok: true });
@@ -238,12 +282,22 @@ router.patch("/:id/read", async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
 
   const row = (await prisma.$queryRawUnsafe(
-    `SELECT id, recipientUserId FROM NotificationEvent WHERE id = ? LIMIT 1`,
+    `SELECT id, recipientUserId, recipientRole FROM NotificationEvent WHERE id = ? LIMIT 1`,
     id,
-  )) as Array<{ id: number; recipientUserId: number | null }>;
+  )) as Array<{ id: number; recipientUserId: number | null; recipientRole: string | null }>;
   if (!row[0]) return res.status(404).json({ message: "Notification not found" });
-  if (row[0].recipientUserId && row[0].recipientUserId !== req.auth!.userId) {
-    return res.status(403).json({ message: "Forbidden" });
+
+  // Check permission: user must either be the recipient OR have the matching role for public notifications
+  if (row[0].recipientUserId) {
+    // Personal notification - only recipient can mark as read
+    if (row[0].recipientUserId !== req.auth!.userId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+  } else if (row[0].recipientRole) {
+    // Role-based public notification - user must have matching role
+    if (row[0].recipientRole !== req.auth!.role) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
   }
 
   await prisma.$executeRawUnsafe(

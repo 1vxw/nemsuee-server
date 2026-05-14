@@ -340,7 +340,10 @@ function loadSmtpConfig() {
 }
 
 function mailConfigured() {
-  return Boolean(loadSmtpConfig().host);
+  const { host, user, pass } = loadSmtpConfig();
+  if (!host) return false;
+  if (user && !pass) return false;
+  return true;
 }
 
 export async function sendMail({
@@ -361,18 +364,29 @@ export async function sendMail({
 
   const { host, port, user, pass, from, secure } = loadSmtpConfig();
 
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: user ? { user, pass } : undefined,
-  });
+  try {
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: user ? { user, pass } : undefined,
+    });
 
-  await transporter.sendMail({
-    from,
-    to,
-    subject,
-    html,
-    text,
-  });
+    if (process.env.NODE_ENV !== "production") {
+      await transporter.verify();
+    }
+
+    await transporter.sendMail({
+      from,
+      to,
+      subject,
+      html,
+      text,
+    });
+  } catch (err) {
+    const isProduction = process.env.NODE_ENV === "production";
+    if (isProduction) throw err;
+    console.error("[mail:error:fallback]", err);
+    console.log("[mail:dev:fallback]", { to, subject, text: text || "(no text)", html });
+  }
 }
